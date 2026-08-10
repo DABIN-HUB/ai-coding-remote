@@ -1,0 +1,3 @@
+com.wangbin.ai.framework.datasource.config.DABINDataSourceAutoConfiguration
+com.wangbin.ai.framework.mybatis.config.DABINMybatisAutoConfiguration
+com.wangbin.ai.framework.translate.config.DABINTranslateAutoConfiguration

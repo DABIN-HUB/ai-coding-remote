@@ -1,0 +1,3 @@
+com.wangbin.ai.framework.security.config.DABINSecurityAutoConfiguration
+com.wangbin.ai.framework.security.config.DABINWebSecurityConfigurerAdapter
+com.wangbin.ai.framework.operatelog.config.DABINOperateLogConfiguration

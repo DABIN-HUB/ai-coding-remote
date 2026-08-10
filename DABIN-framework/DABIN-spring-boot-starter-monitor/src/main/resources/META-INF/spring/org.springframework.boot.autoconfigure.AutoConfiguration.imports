@@ -1,0 +1,2 @@
+com.wangbin.ai.framework.tracer.config.DABINTracerAutoConfiguration
+com.wangbin.ai.framework.tracer.config.DABINMetricsAutoConfiguration

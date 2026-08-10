@@ -1,0 +1,7 @@
+com.wangbin.ai.framework.apilog.config.DABINApiLogAutoConfiguration
+com.wangbin.ai.framework.jackson.config.DABINJacksonAutoConfiguration
+com.wangbin.ai.framework.swagger.config.DABINSwaggerAutoConfiguration
+com.wangbin.ai.framework.web.config.DABINWebAutoConfiguration
+com.wangbin.ai.framework.xss.config.DABINXssAutoConfiguration
+com.wangbin.ai.framework.banner.config.DABINBannerAutoConfiguration
+com.wangbin.ai.framework.encrypt.config.DABINApiEncryptAutoConfiguration

@@ -1,0 +1,2 @@
+com.wangbin.ai.framework.quartz.config.DABINQuartzAutoConfiguration
+com.wangbin.ai.framework.quartz.config.DABINAsyncAutoConfiguration

@@ -1,0 +1,4 @@
+com.wangbin.ai.framework.idempotent.config.DABINIdempotentConfiguration
+com.wangbin.ai.framework.lock4j.config.DABINLock4jConfiguration
+com.wangbin.ai.framework.ratelimiter.config.DABINRateLimiterConfiguration
+com.wangbin.ai.framework.signature.config.DABINApiSignatureAutoConfiguration

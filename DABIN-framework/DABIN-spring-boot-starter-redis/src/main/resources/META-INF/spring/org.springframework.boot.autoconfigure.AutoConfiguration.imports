@@ -1,0 +1,2 @@
+com.wangbin.ai.framework.redis.config.DABINRedisAutoConfiguration
+com.wangbin.ai.framework.redis.config.DABINCacheAutoConfiguration
