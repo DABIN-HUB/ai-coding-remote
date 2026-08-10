@@ -42,11 +42,6 @@ import Logger from '@/utils/Logger'
 
 import VueDOMPurifyHTML from 'vue-dompurify-html' // 解决v-html 的安全隐患
 
-// wangEditor 插件注册
-import { setupWangEditorPlugin } from '@/views/bpm/model/form/PrintTemplate'
-
-import print from 'vue3-print-nb' // 打印插件
-
 // 处理 Vite 预加载模块失败（如重新构建后 chunk 哈希变化），自动刷新页面
 window.addEventListener('vite:preloadError', (event) => {
   event.preventDefault()
@@ -73,15 +68,9 @@ const setupAll = async () => {
   setupAuth(app)
   setupMountedFocus(app)
 
-  // wangEditor 插件注册
-  setupWangEditorPlugin()
-
   await router.isReady()
 
   app.use(VueDOMPurifyHTML)
-
-  // 打印
-  app.use(print)
 
   app.mount('#app')
 }

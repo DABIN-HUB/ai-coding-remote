@@ -13,7 +13,7 @@ import {
 const modules = import.meta.glob('../views/**/*.{vue,tsx}')
 /**
  * 注册一个异步组件
- * @param componentPath 例:/bpm/oa/leave/detail
+ * @param componentPath 例:/system/user/index
  */
 export const registerComponent = (componentPath: string) => {
   for (const item in modules) {
@@ -190,8 +190,8 @@ export const generateRoute = (routes: AppCustomRouteRecordRaw[]): AppRouteRecord
       }
       if (route.children) {
         data.children = generateRoute(route.children)
-        // Vue Router 要求路由 name 全局唯一；后端菜单可能生成父子同名，例如 /mall/trade/delivery/express。
-        // 父级只有一个同名默认页时才折叠；存在兄弟节点时必须保留子菜单，例如商城装修下的装修模板。
+        // Vue Router 要求路由 name 全局唯一；后端菜单可能生成父子同名，例如 /system/menu。
+        // 父级只有一个同名默认页时才折叠；存在兄弟节点时必须保留子菜单。
         const sameNameChild = findDescendantRouteByName(data.children, data.name)
         if (sameNameChild) {
           data.name = `${data.name}Parent`

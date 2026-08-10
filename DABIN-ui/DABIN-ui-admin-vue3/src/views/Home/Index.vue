@@ -223,9 +223,9 @@ let totalSate = reactive<WorkplaceTotal>({
 
 const getCount = async () => {
   const data = {
-    project: 40,
-    access: 2340,
-    todo: 10
+    project: 3,
+    access: 1280,
+    todo: 6
   }
   totalSate = Object.assign(totalSate, data)
 }
@@ -235,50 +235,50 @@ let projects = reactive<Project[]>([])
 const getProject = async () => {
   const data = [
     {
-      name: 'ruoyi-vue-pro',
-      icon: 'simple-icons:springboot',
-      message: 'github.com/YunaiV/ruoyi-vue-pro',
-      personal: 'Spring Boot 单体架构',
+      name: 'System 系统管理',
+      icon: 'ep:setting',
+      message: '用户、角色、菜单、权限与审计日志等后台基础能力',
+      personal: '平台基础',
       time: new Date('2025-01-02'),
       color: '#6DB33F'
     },
     {
-      name: 'yudao-ui-admin-vue3',
-      icon: 'ep:element-plus',
-      message: 'github.com/yudaocode/yudao-ui-admin-vue3',
-      personal: 'Vue3 + element-plus 管理后台',
+      name: 'Infra 基础设施',
+      icon: 'ep:cpu',
+      message: '文件、配置、代码生成、任务调度、Redis 与服务监控',
+      personal: '通用基础设施',
       time: new Date('2025-02-03'),
       color: '#409EFF'
     },
     {
-      name: 'yudao-ui-mall-uniapp',
-      icon: 'icon-park-outline:mall-bag',
-      message: 'github.com/yudaocode/yudao-ui-mall-uniapp',
-      personal: 'Vue3 + uniapp 商城手机端',
+      name: 'Pay 支付模块',
+      icon: 'ep:money',
+      message: '支付应用、渠道、订单、退款、回调与钱包能力',
+      personal: '商业化基础',
       time: new Date('2025-03-04'),
       color: '#ff4d4f'
     },
     {
-      name: 'yudao-cloud',
-      icon: 'material-symbols:cloud-outline',
-      message: 'github.com/YunaiV/yudao-cloud',
-      personal: 'Spring Cloud 微服务架构',
+      name: '用户认证',
+      icon: 'ep:lock',
+      message: '登录、退出登录、Token 管理和 OAuth2 相关能力',
+      personal: '访问控制',
       time: new Date('2025-04-05'),
       color: '#1890ff'
     },
     {
-      name: 'yudao-ui-admin-vben',
-      icon: 'devicon:antdesign',
-      message: 'github.com/yudaocode/yudao-ui-admin-vben',
-      personal: 'Vue3 + vben5(antd) 管理后台',
+      name: '动态菜单',
+      icon: 'ep:menu',
+      message: '根据后端权限生成动态菜单与动态路由',
+      personal: 'RBAC',
       time: new Date('2025-05-06'),
       color: '#e18525'
     },
     {
-      name: 'yudao-ui-admin-uniapp',
-      icon: 'ant-design:mobile',
-      message: 'github.com/yudaocode/yudao-ui-admin-uniapp',
-      personal: 'Vue3 + uniapp 管理手机端',
+      name: '前端基础工程',
+      icon: 'ep:monitor',
+      message: 'Vue3、TypeScript、Element Plus、Pinia、Router 与通用组件',
+      personal: '长期开发底座',
       time: new Date('2025-06-01'),
       color: '#2979ff'
     }
@@ -291,27 +291,27 @@ let notice = reactive<Notice[]>([])
 const getNotice = async () => {
   const data = [
     {
-      title: '系统支持 JDK 8/17/21，Vue 2/3',
-      type: '技术兼容性',
-      keys: ['JDK', 'Vue'],
+      title: '前端基础工程保留登录、权限、动态菜单和基础 Layout',
+      type: '基础框架',
+      keys: ['登录', '权限'],
       date: new Date()
     },
     {
-      title: '后端提供 Spring Boot 2.7/3.2 + Cloud 双架构',
-      type: '架构灵活性',
-      keys: ['Boot', 'Cloud'],
+      title: 'System、Infra、Pay 将作为后续 SaaS 平台基础模块',
+      type: '保留模块',
+      keys: ['System', 'Pay'],
       date: new Date()
     },
     {
-      title: '全部开源，个人与企业可 100% 直接使用，无需授权',
-      type: '开源免授权',
-      keys: ['无需授权'],
+      title: '无关业务页面已移出',
+      type: '业务瘦身',
+      keys: ['业务瘦身'],
       date: new Date()
     },
     {
-      title: '国内使用最广泛的快速开发平台，远超 10w+ 企业使用',
-      type: '广泛企业认可',
-      keys: ['最广泛', '10w+'],
+      title: '后续 Coding Agent 业务将独立使用 agent 领域命名',
+      type: '领域边界',
+      keys: ['agent'],
       date: new Date()
     }
   ]
@@ -330,33 +330,33 @@ const getShortcut = async () => {
       color: '#1fdaca'
     },
     {
-      name: '商城中心',
-      icon: 'ep:shop',
-      url: '/mall/home',
+      name: '用户管理',
+      icon: 'ep:user',
+      url: '/system/user',
       color: '#ff6b6b'
     },
     {
-      name: 'AI 大模型',
-      icon: 'tabler:ai',
-      url: '/ai/chat',
+      name: '角色权限',
+      icon: 'ep:key',
+      url: '/system/role',
       color: '#7c3aed'
     },
     {
-      name: 'ERP 系统',
-      icon: 'simple-icons:erpnext',
-      url: '/erp/home',
+      name: '菜单管理',
+      icon: 'ep:menu',
+      url: '/system/menu',
       color: '#3fb27f'
     },
     {
-      name: 'CRM 系统',
-      icon: 'simple-icons:civicrm',
-      url: '/crm/backlog',
+      name: '文件管理',
+      icon: 'ep:folder',
+      url: '/infra/file',
       color: '#4daf1bc9'
     },
     {
-      name: 'IoT 物联网',
-      icon: 'fa-solid:hdd',
-      url: '/iot/home',
+      name: '支付应用',
+      icon: 'ep:wallet',
+      url: '/pay/app',
       color: '#1a73e8'
     }
   ]
@@ -424,7 +424,9 @@ const getAllApi = async () => {
 }
 
 const handleProjectClick = (message: string) => {
-  window.open(`https://${message}`, '_blank')
+  if (message.startsWith('http')) {
+    window.open(message, '_blank')
+  }
 }
 
 const handleShortcutClick = (url: string) => {

@@ -91,7 +91,6 @@ export default {
     sizeIcon: 'Size icon',
     localeIcon: 'Locale icon',
     messageIcon: 'Message icon',
-    imIcon: 'IM icon',
     tagsView: 'Tags view',
     logo: 'Logo',
     greyMode: 'Grey mode',

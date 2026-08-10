@@ -1,6 +1,5 @@
 const include = [
   'qs',
-  'url',
   'vue',
   'mitt',
   'axios',
@@ -23,11 +22,7 @@ const include = [
   'echarts-wordcloud',
   '@wangeditor-next/editor',
   '@wangeditor-next/editor-for-vue',
-  '@microsoft/fetch-event-source',
   'markdown-it',
-  'markmap-view',
-  'markmap-lib',
-  'markmap-toolbar',
   'highlight.js',
   'element-plus',
   'element-plus/es',
