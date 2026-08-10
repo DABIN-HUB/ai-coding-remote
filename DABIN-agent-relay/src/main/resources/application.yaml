@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: DABIN-agent-relay
+
+server:
+  port: 48180
+
+agent:
+  relay:
+    outbound-queue-capacity: 1024

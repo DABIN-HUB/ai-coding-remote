@@ -1,0 +1,24 @@
+package com.wangbin.ai.agent.contract.event;
+
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
+import com.wangbin.ai.agent.contract.enums.EventPriority;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class AgentEventTypePriorityTest {
+
+    @Test
+    void shouldAssignCriticalPriorityToLosslessEvents() {
+        assertThat(AgentEventType.PERMISSION_REQUIRED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
+        assertThat(AgentEventType.TASK_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
+        assertThat(AgentEventType.ERROR.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
+        assertThat(AgentEventType.SESSION_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
+    }
+
+    @Test
+    void shouldAllowTransientDeltaToBeDroppedOrMerged() {
+        assertThat(AgentEventType.AGENT_MESSAGE_DELTA.defaultPriority()).isEqualTo(EventPriority.TRANSIENT);
+    }
+
+}

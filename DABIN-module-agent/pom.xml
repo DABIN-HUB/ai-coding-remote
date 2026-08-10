@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.wangbin.ai</groupId>
+        <artifactId>DABIN</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>DABIN-module-agent</artifactId>
+    <packaging>jar</packaging>
+
+    <name>${project.artifactId}</name>
+    <description>AI Coding Remote control-plane agent module skeleton</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.wangbin.ai</groupId>
+            <artifactId>DABIN-agent-contract</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.wangbin.ai</groupId>
+            <artifactId>DABIN-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+        </dependency>
+    </dependencies>
+</project>

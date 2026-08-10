@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: DABIN-agent-daemon
+  main:
+    web-application-type: none
+
+agent:
+  daemon:
+    process-io-threads: 4
+    event-aggregation-window: 100ms
+    event-aggregation-max-chars: 160
+  codex:
+    executable: codex
+    startup-timeout: 30s
+    request-timeout: 60s
+    experimental-api: true

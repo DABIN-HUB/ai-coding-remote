@@ -441,6 +441,16 @@
                 <artifactId>DABIN-common</artifactId>
                 <version>${revision}</version>
             </dependency>
+            <dependency>
+                <groupId>com.wangbin.ai</groupId>
+                <artifactId>DABIN-agent-contract</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.wangbin.ai</groupId>
+                <artifactId>DABIN-module-agent</artifactId>
+                <version>${revision}</version>
+            </dependency>
 
             <dependency>
                 <groupId>com.wangbin.ai</groupId>

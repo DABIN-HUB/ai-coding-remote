@@ -10,25 +10,15 @@
     <modules>
         <module>DABIN-dependencies</module>
         <module>DABIN-framework</module>
+        <module>DABIN-agent-contract</module>
+        <module>DABIN-agent-relay</module>
+        <module>DABIN-agent-daemon</module>
         <!-- Server 主项目 -->
         <module>DABIN-server</module>
         <!-- 各种 module 拓展 -->
+        <module>DABIN-module-agent</module>
         <module>DABIN-module-system</module>
         <module>DABIN-module-infra</module>
-<!--        <module>DABIN-module-member</module>-->
-<!--        <module>DABIN-module-bpm</module>-->
-<!--        <module>DABIN-module-report</module>-->
-<!--        <module>DABIN-module-mp</module>-->
-<!--        <module>DABIN-module-pay</module>-->
-<!--        <module>DABIN-module-mall</module>-->
-<!--        <module>DABIN-module-crm</module>-->
-<!--        <module>DABIN-module-erp</module>-->
-<!--        <module>DABIN-module-iot</module>-->
-<!--        <module>DABIN-module-mes</module>-->
-<!--        <module>DABIN-module-wms</module>-->
-<!--        <module>DABIN-module-im</module>-->
-<!-- 请参考 https://doc.iocoder.cn/ai/build/ 文档，完成 AI 模块的启动！！！ -->
-<!--        <module>DABIN-module-ai</module>-->
     </modules>
 
     <name>${project.artifactId}</name>
@@ -38,7 +28,7 @@
     <properties>
         <revision>2026.06-SNAPSHOT</revision>
         <!-- Maven 相关 -->
-        <java.version>17</java.version>
+        <java.version>21</java.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>

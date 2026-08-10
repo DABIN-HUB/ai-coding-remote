@@ -2,61 +2,61 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>com.wangbin.ai</groupId>
         <artifactId>DABIN</artifactId>
         <version>${revision}</version>
     </parent>
-    <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>DABIN-server</artifactId>
+    <artifactId>DABIN-agent-daemon</artifactId>
     <packaging>jar</packaging>
 
     <name>${project.artifactId}</name>
-    <description>
-        后端 Server 的主项目，通过引入需要 DABIN-module-xxx 的依赖，
-        从而实现提供 RESTful API 给 DABIN-ui-admin、DABIN-ui-user 等前端项目。
-        本质上来说，它就是个空壳（容器）！
-    </description>
-    <url>https://github.com/YunaiV/ruoyi-vue-pro</url>
+    <description>AI Coding Remote local execution daemon</description>
 
     <dependencies>
         <dependency>
             <groupId>com.wangbin.ai</groupId>
-            <artifactId>DABIN-module-system</artifactId>
-            <version>${revision}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.wangbin.ai</groupId>
-            <artifactId>DABIN-module-infra</artifactId>
-            <version>${revision}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.wangbin.ai</groupId>
-            <artifactId>DABIN-module-agent</artifactId>
-            <version>${revision}</version>
+            <artifactId>DABIN-agent-contract</artifactId>
         </dependency>
 
-        <!-- spring boot 配置所需依赖 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
         </dependency>
 
-        <!-- 服务保障相关 -->
         <dependency>
-            <groupId>com.wangbin.ai</groupId>
-            <artifactId>DABIN-spring-boot-starter-protection</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
-
     </dependencies>
 
     <build>
-        <!-- 设置构建的 jar 包名 -->
         <finalName>${project.artifactId}</finalName>
         <plugins>
-            <!-- 打包 -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -64,12 +64,11 @@
                 <executions>
                     <execution>
                         <goals>
-                            <goal>repackage</goal> <!-- 将引入的 jar 打入其中 -->
+                            <goal>repackage</goal>
                         </goals>
                     </execution>
                 </executions>
             </plugin>
         </plugins>
     </build>
-
 </project>
