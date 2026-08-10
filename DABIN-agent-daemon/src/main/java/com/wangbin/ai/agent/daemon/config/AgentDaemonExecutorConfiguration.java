@@ -3,6 +3,7 @@ package com.wangbin.ai.agent.daemon.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -15,6 +16,11 @@ public class AgentDaemonExecutorConfiguration {
     public ExecutorService agentProcessIoExecutor(AgentDaemonProperties properties) {
         return Executors.newFixedThreadPool(properties.getProcessIoThreads(),
                 namedThreadFactory("agent-process-io-"));
+    }
+
+    @Bean(destroyMethod = "shutdown")
+    public ScheduledExecutorService agentEventScheduler() {
+        return Executors.newSingleThreadScheduledExecutor(namedThreadFactory("agent-event-scheduler-"));
     }
 
     private static ThreadFactory namedThreadFactory(String prefix) {

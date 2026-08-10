@@ -5,8 +5,8 @@ import java.time.Instant;
 public record ConnectionDescriptor(
         String connectionId,
         ConnectionRole role,
-        String tenantId,
-        String userId,
+        Long tenantId,
+        Long userId,
         String deviceId,
         Instant connectedAt
 ) {

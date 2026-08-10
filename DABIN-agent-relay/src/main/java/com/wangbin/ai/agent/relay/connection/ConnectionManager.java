@@ -12,10 +12,10 @@ public interface ConnectionManager {
 
     Mono<Void> unregister(String connectionId);
 
-    Optional<WebSocketSession> findByConnectionId(String connectionId);
+    Optional<ConnectionContext> findByConnectionId(String connectionId);
 
-    Optional<WebSocketSession> findDeviceSession(String deviceId);
+    Optional<ConnectionContext> findDeviceConnection(String deviceId);
 
-    Set<WebSocketSession> findUserSessions(String userId);
+    Set<ConnectionContext> findUserConnections(Long userId);
 
 }

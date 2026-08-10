@@ -10,8 +10,8 @@ import java.util.UUID;
 public record AgentCommand(
         String commandId,
         String traceId,
-        String tenantId,
-        String userId,
+        Long tenantId,
+        Long userId,
         String deviceId,
         String sessionId,
         CommandType commandType,

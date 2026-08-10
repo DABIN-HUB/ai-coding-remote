@@ -7,6 +7,6 @@ public interface EventDispatcher {
 
     Mono<Void> dispatchToDevice(String deviceId, AgentEvent event);
 
-    Mono<Void> dispatchToUser(String userId, AgentEvent event);
+    Mono<Void> dispatchToUser(Long userId, AgentEvent event);
 
 }

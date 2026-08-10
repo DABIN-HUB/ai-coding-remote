@@ -61,7 +61,13 @@ public class CodexJsonRpcClient implements AutoCloseable {
         if (params != null) {
             request.set("params", objectMapper.valueToTree(params));
         }
-        writeJson(request);
+        try {
+            writeJson(request);
+        } catch (RuntimeException ex) {
+            pendingRequests.remove(requestId);
+            future.completeExceptionally(ex);
+            throw ex;
+        }
         future.orTimeout(requestTimeout.toMillis(), TimeUnit.MILLISECONDS)
                 .whenComplete((ignored, throwable) -> pendingRequests.remove(requestId));
         return future;
@@ -101,6 +107,18 @@ public class CodexJsonRpcClient implements AutoCloseable {
         return protocolIssues.asFlux();
     }
 
+    public boolean isClosed() {
+        return closed.get();
+    }
+
+    public int pendingRequestCount() {
+        return pendingRequests.size();
+    }
+
+    public void protocolWarning(String code, String message, String rawLine) {
+        emitIssue(code, message, rawLine);
+    }
+
     void handleLine(String line) {
         if (line == null || line.isBlank()) {
             return;
@@ -128,6 +146,7 @@ public class CodexJsonRpcClient implements AutoCloseable {
     }
 
     public void closeWithError(Throwable throwable) {
+        closed.set(true);
         pendingRequests.forEach((id, future) -> future.completeExceptionally(throwable));
         pendingRequests.clear();
         messages.tryEmitComplete();
@@ -181,6 +200,9 @@ public class CodexJsonRpcClient implements AutoCloseable {
     }
 
     private synchronized void writeJson(JsonNode node) {
+        if (closed.get()) {
+            throw new AgentConnectionException("codex JSON-RPC client is closed", null);
+        }
         try {
             writer.write(objectMapper.writeValueAsString(node));
             writer.write(System.lineSeparator());

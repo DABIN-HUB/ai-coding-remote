@@ -12,8 +12,8 @@ import java.util.UUID;
 public record AgentEvent(
         String eventId,
         String traceId,
-        String tenantId,
-        String userId,
+        Long tenantId,
+        Long userId,
         String deviceId,
         String projectId,
         String sessionId,
@@ -35,7 +35,7 @@ public record AgentEvent(
         extensions = extensions == null ? Map.of() : Map.copyOf(extensions);
     }
 
-    public static AgentEvent of(String traceId, String tenantId, String userId, String deviceId, String projectId,
+    public static AgentEvent of(String traceId, Long tenantId, Long userId, String deviceId, String projectId,
                                 String sessionId, long seq, AgentType agentType, AgentEventType type,
                                 AgentEventPayload payload) {
         return new AgentEvent(null, traceId, tenantId, userId, deviceId, projectId, sessionId, seq, agentType,

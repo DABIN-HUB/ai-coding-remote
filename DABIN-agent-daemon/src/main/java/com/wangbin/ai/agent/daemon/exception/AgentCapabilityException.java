@@ -6,4 +6,8 @@ public class AgentCapabilityException extends RuntimeException {
         super(message);
     }
 
+    public AgentCapabilityException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
 }

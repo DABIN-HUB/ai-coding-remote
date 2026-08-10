@@ -68,8 +68,8 @@ public class CodexSmokeRunner implements ApplicationRunner {
         }
 
         AgentSession session = codexAdapter.startSession(new SessionStartRequest(
-                "local-dev-tenant",
-                "local-dev-user",
+                1L,
+                1L,
                 "local-dev-device",
                 "local-dev-project",
                 workspace,

@@ -13,7 +13,7 @@ public record AgentCapabilities(
 ) {
 
     public static AgentCapabilities codexDefault() {
-        return new AgentCapabilities(true, true, true, true, true, true, true, true, true);
+        return new AgentCapabilities(true, false, false, false, false, false, false, false, false);
     }
 
     public static AgentCapabilities unknown() {

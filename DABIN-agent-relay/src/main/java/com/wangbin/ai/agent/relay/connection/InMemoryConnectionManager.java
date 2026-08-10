@@ -1,7 +1,8 @@
 package com.wangbin.ai.agent.relay.connection;
 
+import com.wangbin.ai.agent.relay.backpressure.BoundedOutboundMessageQueue;
+import com.wangbin.ai.agent.relay.config.AgentRelayProperties;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
@@ -13,19 +14,26 @@ import java.util.stream.Collectors;
 @Component
 public class InMemoryConnectionManager implements ConnectionManager {
 
-    private final Map<String, ConnectionRegistration> byConnectionId = new ConcurrentHashMap<>();
+    private final AgentRelayProperties properties;
+    private final Map<String, ConnectionContext> byConnectionId = new ConcurrentHashMap<>();
     private final Map<String, String> deviceToConnectionId = new ConcurrentHashMap<>();
-    private final Map<String, Set<String>> userToConnectionIds = new ConcurrentHashMap<>();
+    private final Map<Long, Set<String>> userToConnectionIds = new ConcurrentHashMap<>();
+
+    public InMemoryConnectionManager(AgentRelayProperties properties) {
+        this.properties = properties;
+    }
 
     @Override
     public Mono<Void> register(ConnectionRegistration registration) {
         return Mono.fromRunnable(() -> {
             ConnectionDescriptor descriptor = registration.descriptor();
-            byConnectionId.put(descriptor.connectionId(), registration);
+            ConnectionContext context = new ConnectionContext(descriptor, registration.session(),
+                    new BoundedOutboundMessageQueue(properties.getOutboundQueueCapacity()));
+            byConnectionId.put(descriptor.connectionId(), context);
             if (descriptor.deviceId() != null && !descriptor.deviceId().isBlank()) {
                 deviceToConnectionId.put(descriptor.deviceId(), descriptor.connectionId());
             }
-            if (descriptor.userId() != null && !descriptor.userId().isBlank()) {
+            if (descriptor.userId() != null) {
                 userToConnectionIds.computeIfAbsent(descriptor.userId(), ignored -> ConcurrentHashMap.newKeySet())
                         .add(descriptor.connectionId());
             }
@@ -35,7 +43,7 @@ public class InMemoryConnectionManager implements ConnectionManager {
     @Override
     public Mono<Void> unregister(String connectionId) {
         return Mono.fromRunnable(() -> {
-            ConnectionRegistration removed = byConnectionId.remove(connectionId);
+            ConnectionContext removed = byConnectionId.remove(connectionId);
             if (removed == null) {
                 return;
             }
@@ -56,17 +64,17 @@ public class InMemoryConnectionManager implements ConnectionManager {
     }
 
     @Override
-    public Optional<WebSocketSession> findByConnectionId(String connectionId) {
-        return Optional.ofNullable(byConnectionId.get(connectionId)).map(ConnectionRegistration::session);
+    public Optional<ConnectionContext> findByConnectionId(String connectionId) {
+        return Optional.ofNullable(byConnectionId.get(connectionId));
     }
 
     @Override
-    public Optional<WebSocketSession> findDeviceSession(String deviceId) {
+    public Optional<ConnectionContext> findDeviceConnection(String deviceId) {
         return Optional.ofNullable(deviceToConnectionId.get(deviceId)).flatMap(this::findByConnectionId);
     }
 
     @Override
-    public Set<WebSocketSession> findUserSessions(String userId) {
+    public Set<ConnectionContext> findUserConnections(Long userId) {
         return userToConnectionIds.getOrDefault(userId, Set.of()).stream()
                 .map(this::findByConnectionId)
                 .flatMap(Optional::stream)

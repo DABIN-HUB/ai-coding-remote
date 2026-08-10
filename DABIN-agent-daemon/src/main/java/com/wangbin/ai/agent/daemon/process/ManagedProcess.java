@@ -17,7 +17,7 @@ public class ManagedProcess implements AutoCloseable {
     private final AtomicReference<ProcessState> state;
     private final BufferedReader stdout;
 
-    ManagedProcess(Process process, AtomicReference<ProcessState> state) {
+    public ManagedProcess(Process process, AtomicReference<ProcessState> state) {
         this.process = process;
         this.state = state;
         this.startTime = Instant.now();
@@ -42,6 +42,10 @@ public class ManagedProcess implements AutoCloseable {
 
     public Process process() {
         return process;
+    }
+
+    public boolean isAlive() {
+        return process.isAlive();
     }
 
     public Optional<Integer> exitCode() {

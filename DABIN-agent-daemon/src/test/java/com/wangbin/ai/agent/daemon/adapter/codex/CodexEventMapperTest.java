@@ -17,7 +17,7 @@ class CodexEventMapperTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final CodexEventMapper mapper = new CodexEventMapper(objectMapper);
     private final CodexSessionContext context = new CodexSessionContext("platform-1", "native-1",
-            "tenant-1", "user-1", "device-1", "project-1", "F:/workspace", AgentType.CODEX);
+            1L, 11L, "device-1", "project-1", "F:/workspace", AgentType.CODEX);
 
     @Test
     void mapsAgentMessageDelta() throws Exception {
@@ -67,6 +67,23 @@ class CodexEventMapperTest {
                 objectMapper.readTree("{\"threadId\":\"native-1\"}"));
 
         assertThat(mapper.map(message, context)).isEmpty();
+    }
+
+    @Test
+    void assignsSequencePerPlatformSession() throws Exception {
+        CodexSessionContext sessionA = new CodexSessionContext("platform-a", "native-a",
+                1L, 11L, "device-a", "project-a", "F:/workspace-a", AgentType.CODEX);
+        CodexSessionContext sessionB = new CodexSessionContext("platform-b", "native-b",
+                1L, 12L, "device-b", "project-b", "F:/workspace-b", AgentType.CODEX);
+        var eventA = CodexRpcMessage.notification("turn/started",
+                objectMapper.readTree("{\"threadId\":\"native-a\",\"turn\":{\"id\":\"turn-a\"}}"));
+        var eventB = CodexRpcMessage.notification("turn/started",
+                objectMapper.readTree("{\"threadId\":\"native-b\",\"turn\":{\"id\":\"turn-b\"}}"));
+
+        assertThat(mapper.map(eventA, sessionA).getFirst().seq()).isEqualTo(1);
+        assertThat(mapper.map(eventA, sessionA).getFirst().seq()).isEqualTo(2);
+        assertThat(mapper.map(eventB, sessionB).getFirst().seq()).isEqualTo(1);
+        assertThat(mapper.map(eventA, sessionA).getFirst().seq()).isEqualTo(3);
     }
 
 }

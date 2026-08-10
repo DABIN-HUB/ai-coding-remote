@@ -20,4 +20,25 @@ class BoundedOutboundMessageQueueTest {
         assertThat(queue.capacity()).isEqualTo(1);
     }
 
+    @Test
+    void shouldRejectCriticalMessagesExplicitlyWhenCapacityIsReached() {
+        BoundedOutboundMessageQueue queue = new BoundedOutboundMessageQueue(1);
+
+        assertThat(queue.offer(new OutboundMessage("c1", EventPriority.CRITICAL, "first", null))).isTrue();
+        assertThat(queue.offer(new OutboundMessage("c1", EventPriority.CRITICAL, "critical", null))).isFalse();
+        assertThat(queue.size()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldMakeRoomForHigherPriorityMessagesByDroppingLowerPriorityMessages() {
+        BoundedOutboundMessageQueue queue = new BoundedOutboundMessageQueue(2);
+
+        assertThat(queue.offer(new OutboundMessage("c1", EventPriority.TRANSIENT, "transient", null))).isTrue();
+        assertThat(queue.offer(new OutboundMessage("c1", EventPriority.NORMAL, "normal", null))).isTrue();
+        assertThat(queue.offer(new OutboundMessage("c1", EventPriority.IMPORTANT, "important", null))).isTrue();
+
+        assertThat(queue.drainAll()).extracting(OutboundMessage::payload)
+                .containsExactly("normal", "important");
+    }
+
 }

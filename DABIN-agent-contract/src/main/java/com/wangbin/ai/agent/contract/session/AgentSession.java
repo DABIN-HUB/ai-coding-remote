@@ -10,8 +10,8 @@ import java.util.UUID;
 public record AgentSession(
         String platformSessionId,
         String nativeSessionId,
-        String tenantId,
-        String userId,
+        Long tenantId,
+        Long userId,
         String deviceId,
         String projectId,
         AgentType agentType,

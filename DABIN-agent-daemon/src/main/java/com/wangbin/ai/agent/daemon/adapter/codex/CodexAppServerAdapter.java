@@ -16,9 +16,11 @@ import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessageKind;
+import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.config.AgentCodexProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
+import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
 import com.wangbin.ai.agent.daemon.exception.AgentSessionException;
 import com.wangbin.ai.agent.daemon.process.ManagedProcess;
@@ -37,6 +39,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 @Component
 public class CodexAppServerAdapter implements CodingAgentAdapter {
@@ -55,7 +58,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
 
     private volatile ManagedProcess managedProcess;
     private volatile CodexJsonRpcClient rpcClient;
-    private volatile boolean initialized;
+    private volatile CodexRuntimeState runtimeState = CodexRuntimeState.STOPPED;
 
     public CodexAppServerAdapter(ObjectMapper objectMapper,
                                  AgentCodexProperties codexProperties,
@@ -91,7 +94,8 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         params.put("cwd", workspace.toString());
         params.put("experimentalRawEvents", true);
         params.put("approvalPolicy", "on-request");
-        JsonNode response = await(rpcClient.request("thread/start", params), "thread/start");
+        JsonNode response = await(rpcClient.request(CodexProtocolConstants.METHOD_THREAD_START, params),
+                CodexProtocolConstants.METHOD_THREAD_START);
         String nativeSessionId = response.path("thread").path("id").asText(null);
         if (nativeSessionId == null || nativeSessionId.isBlank()) {
             throw new AgentProtocolException("thread/start response did not contain thread.id: " + response);
@@ -102,11 +106,11 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         platformSessions.put(platformSessionId, context);
         nativeSessions.put(nativeSessionId, context);
         emit(new AgentEvent(null, UUID.randomUUID().toString(), request.tenantId(), request.userId(),
-                request.deviceId(), request.projectId(), platformSessionId, 0, AgentType.CODEX,
+                request.deviceId(), request.projectId(), platformSessionId, context.nextSeq(), AgentType.CODEX,
                 com.wangbin.ai.agent.contract.enums.AgentEventType.SESSION_STARTED, null, null,
                 new SessionPayload(nativeSessionId, AgentSessionStatus.RUNNING, null,
-                        Map.of("source", "thread/start")),
-                Map.of("nativeMethod", "thread/start")));
+                        Map.of("source", CodexProtocolConstants.METHOD_THREAD_START)),
+                Map.of("nativeMethod", CodexProtocolConstants.METHOD_THREAD_START)), context);
         return new AgentSession(platformSessionId, nativeSessionId, request.tenantId(), request.userId(),
                 request.deviceId(), request.projectId(), AgentType.CODEX, AgentSessionStatus.RUNNING,
                 capabilities(), Instant.now(), Map.of("workspacePath", workspace.toString()));
@@ -123,7 +127,8 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         ObjectNode text = input.addObject();
         text.put("type", "text");
         text.put("text", command.prompt());
-        JsonNode response = await(rpcClient.request("turn/start", params), "turn/start");
+        JsonNode response = await(rpcClient.request(CodexProtocolConstants.METHOD_TURN_START, params),
+                CodexProtocolConstants.METHOD_TURN_START);
         String turnId = response.path("turn").path("id").asText(null);
         if (turnId != null) {
             activeTurnIds.put(context.platformSessionId(), turnId);
@@ -140,7 +145,8 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         ObjectNode params = objectMapper.createObjectNode();
         params.put("threadId", context.nativeSessionId());
         params.put("turnId", turnId);
-        await(rpcClient.request("turn/interrupt", params), "turn/interrupt");
+        await(rpcClient.request(CodexProtocolConstants.METHOD_TURN_INTERRUPT, params),
+                CodexProtocolConstants.METHOD_TURN_INTERRUPT);
     }
 
     @Override
@@ -157,28 +163,49 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     public void closeSession(String sessionId) {
         CodexSessionContext removed = platformSessions.remove(sessionId);
         if (removed != null) {
+            eventAggregator.flushSession(removed.platformSessionId(), removed::nextSeq, this::emitDirect)
+                    .forEach(this::emitDirect);
             nativeSessions.remove(removed.nativeSessionId());
             activeTurnIds.remove(sessionId);
         }
         if (platformSessions.isEmpty() && managedProcess != null) {
-            managedProcess.close();
+            stopRuntime();
         }
     }
 
     private synchronized void ensureStarted(Path workspace) {
-        if (initialized && rpcClient != null) {
+        if (runtimeState == CodexRuntimeState.READY
+                && managedProcess != null
+                && managedProcess.isAlive()
+                && rpcClient != null
+                && !rpcClient.isClosed()) {
             return;
         }
-        managedProcess = appServerProcess.start(workspace);
-        rpcClient = new CodexJsonRpcClient(objectMapper, managedProcess.stdout(),
-                new OutputStreamWriter(managedProcess.process().getOutputStream(), StandardCharsets.UTF_8),
+        if (runtimeState != CodexRuntimeState.STOPPED) {
+            cleanupRuntime(CodexRuntimeState.CRASHED);
+        }
+        try {
+            runtimeState = CodexRuntimeState.STARTING;
+            managedProcess = appServerProcess.start(workspace);
+            rpcClient = createRpcClient(managedProcess);
+            rpcClient.messages().subscribe(this::handleMessage);
+            rpcClient.protocolIssues().subscribe(issue -> {
+                // Protocol issues are diagnostics and must not be guessed into an unrelated session.
+            });
+            rpcClient.start();
+            runtimeState = CodexRuntimeState.INITIALIZING;
+            initialize();
+            runtimeState = CodexRuntimeState.READY;
+        } catch (RuntimeException ex) {
+            cleanupRuntime(CodexRuntimeState.CRASHED);
+            throw ex;
+        }
+    }
+
+    protected CodexJsonRpcClient createRpcClient(ManagedProcess process) {
+        return new CodexJsonRpcClient(objectMapper, process.stdout(),
+                new OutputStreamWriter(process.process().getOutputStream(), StandardCharsets.UTF_8),
                 processIoExecutor, codexProperties.getRequestTimeout());
-        rpcClient.messages().subscribe(this::handleMessage);
-        rpcClient.protocolIssues().subscribe(issue -> {
-            // Protocol issues are diagnostic. They are intentionally not emitted as AgentEvent without a session.
-        });
-        rpcClient.start();
-        initialize();
     }
 
     private void initialize() {
@@ -189,25 +216,54 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         clientInfo.put("version", "0.1.0");
         ObjectNode capabilities = params.putObject("capabilities");
         capabilities.put("experimentalApi", codexProperties.isExperimentalApi());
-        await(rpcClient.request("initialize", params), "initialize");
-        rpcClient.notify("initialized", null);
-        initialized = true;
+        await(rpcClient.request(CodexProtocolConstants.METHOD_INITIALIZE, params),
+                CodexProtocolConstants.METHOD_INITIALIZE);
+        rpcClient.notify(CodexProtocolConstants.METHOD_INITIALIZED, null);
     }
 
-    private void handleMessage(CodexRpcMessage message) {
+    void handleMessage(CodexRpcMessage message) {
         CodexSessionContext context = resolveContext(message.params());
-        if (context == null && message.kind() == CodexRpcMessageKind.SERVER_REQUEST) {
-            context = platformSessions.values().stream().findFirst().orElse(null);
+        if (message.kind() == CodexRpcMessageKind.SERVER_REQUEST) {
+            handleServerRequest(message, context);
+            return;
         }
         captureActiveTurn(context, message.params());
         for (AgentEvent event : eventMapper.map(message, context)) {
-            emit(event);
+            emit(event, context);
         }
     }
 
-    private void emit(AgentEvent event) {
-        for (AgentEvent aggregated : eventAggregator.accept(event)) {
-            eventSink.tryEmitNext(aggregated);
+    private void handleServerRequest(CodexRpcMessage message, CodexSessionContext context) {
+        if (!CodexProtocolConstants.APPROVAL_REQUEST_METHODS.contains(message.method())) {
+            rpcClient.protocolWarning("unknown_server_request",
+                    "unknown Codex server request method: " + message.method(), null);
+            rpcClient.respondError(message.id(), CodexProtocolConstants.JSON_RPC_METHOD_NOT_FOUND,
+                    "Unsupported server request method: " + message.method());
+            return;
+        }
+        if (context == null) {
+            rpcClient.protocolWarning("unroutable_server_request",
+                    "Codex server request has no resolvable session: " + message.method(), null);
+            rpcClient.respondError(message.id(), CodexProtocolConstants.JSON_RPC_ROUTE_UNAVAILABLE,
+                    "Unable to route server request to a platform session");
+            return;
+        }
+        captureActiveTurn(context, message.params());
+        for (AgentEvent event : eventMapper.map(message, context)) {
+            emit(event, context);
+        }
+    }
+
+    private void emit(AgentEvent event, CodexSessionContext context) {
+        Consumer<AgentEvent> directEmitter = this::emitDirect;
+        for (AgentEvent aggregated : eventAggregator.accept(event, context::nextSeq, directEmitter)) {
+            emitDirect(aggregated);
+        }
+    }
+
+    private void emitDirect(AgentEvent event) {
+        if (event != null) {
+            eventSink.tryEmitNext(event);
         }
     }
 
@@ -252,6 +308,35 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         } catch (Exception ex) {
             throw new AgentProtocolException("Codex operation failed: " + operation, ex);
         }
+    }
+
+    synchronized CodexRuntimeState runtimeState() {
+        return runtimeState;
+    }
+
+    private synchronized void stopRuntime() {
+        if (runtimeState == CodexRuntimeState.STOPPED) {
+            return;
+        }
+        runtimeState = CodexRuntimeState.STOPPING;
+        cleanupRuntime(CodexRuntimeState.STOPPED);
+    }
+
+    private void cleanupRuntime(CodexRuntimeState finalState) {
+        CodexJsonRpcClient client = rpcClient;
+        ManagedProcess process = managedProcess;
+        rpcClient = null;
+        managedProcess = null;
+        if (client != null) {
+            client.closeWithError(new AgentConnectionException("codex runtime stopped", null));
+        }
+        if (process != null) {
+            process.close();
+        }
+        platformSessions.clear();
+        nativeSessions.clear();
+        activeTurnIds.clear();
+        runtimeState = finalState == CodexRuntimeState.CRASHED ? CodexRuntimeState.STOPPED : finalState;
     }
 
 }
