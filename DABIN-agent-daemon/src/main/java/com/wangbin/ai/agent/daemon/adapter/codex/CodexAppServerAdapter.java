@@ -163,7 +163,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     public void closeSession(String sessionId) {
         CodexSessionContext removed = platformSessions.remove(sessionId);
         if (removed != null) {
-            eventAggregator.flushSession(removed.platformSessionId(), removed::nextSeq, this::emitDirect)
+            eventAggregator.closeSession(removed.platformSessionId(), removed::nextSeq, this::emitDirect)
                     .forEach(this::emitDirect);
             nativeSessions.remove(removed.nativeSessionId());
             activeTurnIds.remove(sessionId);

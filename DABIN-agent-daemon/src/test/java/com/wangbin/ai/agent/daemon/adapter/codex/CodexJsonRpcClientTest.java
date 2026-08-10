@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessageKind;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcProtocolIssue;
+import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -37,10 +38,31 @@ class CodexJsonRpcClientTest {
 
         var future = client.request("initialize", objectMapper.createObjectNode().put("client", "test"));
         JsonNode request = objectMapper.readTree(writer.toString().trim());
+        assertThat(request.get("jsonrpc").asText()).isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
 
         client.handleLine("{\"id\":\"" + request.get("id").asText() + "\",\"result\":{\"ok\":true}}");
 
         assertThat(future.join().get("ok").asBoolean()).isTrue();
+    }
+
+    @Test
+    void writesJsonRpcVersionForNotificationsAndServerResponses() throws Exception {
+        StringWriter writer = new StringWriter();
+        CodexJsonRpcClient client = new CodexJsonRpcClient(objectMapper, null, writer, executor,
+                Duration.ofSeconds(5));
+
+        client.notify(CodexProtocolConstants.METHOD_INITIALIZED, null);
+        client.respond("server-1", objectMapper.createObjectNode().put("ok", true));
+        client.respondError("server-2", CodexProtocolConstants.JSON_RPC_METHOD_NOT_FOUND, "unsupported");
+
+        String[] lines = writer.toString().trim().split("\\R");
+        assertThat(lines).hasSize(3);
+        assertThat(objectMapper.readTree(lines[0]).get("jsonrpc").asText())
+                .isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
+        assertThat(objectMapper.readTree(lines[1]).get("jsonrpc").asText())
+                .isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
+        assertThat(objectMapper.readTree(lines[2]).get("jsonrpc").asText())
+                .isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
     }
 
     @Test

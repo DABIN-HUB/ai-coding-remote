@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcProtocolIssue;
+import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
 import reactor.core.publisher.Flux;
@@ -55,7 +56,7 @@ public class CodexJsonRpcClient implements AutoCloseable {
         String requestId = Long.toString(requestSequence.incrementAndGet());
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         pendingRequests.put(requestId, future);
-        ObjectNode request = objectMapper.createObjectNode();
+        ObjectNode request = jsonRpcObject();
         request.put("id", requestId);
         request.put("method", method);
         if (params != null) {
@@ -74,7 +75,7 @@ public class CodexJsonRpcClient implements AutoCloseable {
     }
 
     public void notify(String method, Object params) {
-        ObjectNode notification = objectMapper.createObjectNode();
+        ObjectNode notification = jsonRpcObject();
         notification.put("method", method);
         if (params != null) {
             notification.set("params", objectMapper.valueToTree(params));
@@ -83,14 +84,14 @@ public class CodexJsonRpcClient implements AutoCloseable {
     }
 
     public void respond(String id, Object result) {
-        ObjectNode response = objectMapper.createObjectNode();
+        ObjectNode response = jsonRpcObject();
         response.put("id", id);
         response.set("result", objectMapper.valueToTree(result == null ? Map.of() : result));
         writeJson(response);
     }
 
     public void respondError(String id, int code, String message) {
-        ObjectNode response = objectMapper.createObjectNode();
+        ObjectNode response = jsonRpcObject();
         response.put("id", id);
         ObjectNode error = objectMapper.createObjectNode();
         error.put("code", code);
@@ -210,6 +211,12 @@ public class CodexJsonRpcClient implements AutoCloseable {
         } catch (IOException ex) {
             throw new AgentConnectionException("failed to write JSON-RPC message", ex);
         }
+    }
+
+    private ObjectNode jsonRpcObject() {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("jsonrpc", CodexProtocolConstants.JSON_RPC_VERSION);
+        return node;
     }
 
 }

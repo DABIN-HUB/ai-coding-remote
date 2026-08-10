@@ -11,8 +11,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +28,7 @@ public class DeltaEventAggregator {
     private final int maxChars;
     private final ScheduledExecutorService scheduler;
     private final Map<String, Buffer> buffers = new HashMap<>();
+    private final Set<String> completedMessageKeys = new HashSet<>();
 
     public DeltaEventAggregator(AgentDaemonProperties properties, ScheduledExecutorService agentEventScheduler) {
         this.window = properties.getEventAggregationWindow();
@@ -42,12 +45,22 @@ public class DeltaEventAggregator {
                     timedFlushConsumer));
             String content = payload.content() == null ? "" : payload.content();
             buffer.pendingDelta.append(content);
-            buffer.fullMessage.append(content);
             scheduleFlush(key, buffer);
             if (buffer.pendingDelta.length() >= maxChars || Duration.between(buffer.lastFlush, Instant.now()).compareTo(window) >= 0) {
                 return List.of(flushDelta(buffer));
             }
             return List.of();
+        }
+        if (event.type() == AgentEventType.AGENT_MESSAGE
+                && event.payload() instanceof AgentMessagePayload payload) {
+            String key = event.sessionId() + ":" + payload.messageId();
+            if (completedMessageKeys.contains(key)) {
+                return List.of();
+            }
+            completedMessageKeys.add(key);
+            List<AgentEvent> flushed = flushMessage(key);
+            flushed.add(copyWithSeq(event, sequenceSupplier.getAsLong()));
+            return flushed;
         }
         if (event.type() == AgentEventType.SESSION_IDLE
                 || event.type() == AgentEventType.SESSION_COMPLETED
@@ -67,15 +80,28 @@ public class DeltaEventAggregator {
                 .toList();
         for (String key : keys) {
             Buffer buffer = buffers.remove(key);
-            if (buffer != null && !buffer.fullMessage.isEmpty()) {
+            if (buffer != null && !buffer.pendingDelta.isEmpty()) {
                 buffer.cancelTimer();
-                if (!buffer.pendingDelta.isEmpty()) {
-                    result.add(toDeltaEvent(buffer, buffer.pendingDelta.toString()));
-                }
-                result.add(toFinalMessage(buffer));
+                result.add(toDeltaEvent(buffer, buffer.pendingDelta.toString()));
             }
         }
         return result;
+    }
+
+    public synchronized List<AgentEvent> closeSession(String sessionId, LongSupplier sequenceSupplier,
+                                                      Consumer<AgentEvent> timedFlushConsumer) {
+        List<AgentEvent> result = flushSession(sessionId, sequenceSupplier, timedFlushConsumer);
+        completedMessageKeys.removeIf(key -> key.startsWith(sessionId + ":"));
+        return result;
+    }
+
+    private List<AgentEvent> flushMessage(String key) {
+        Buffer buffer = buffers.remove(key);
+        if (buffer == null || buffer.pendingDelta.isEmpty()) {
+            return new ArrayList<>();
+        }
+        buffer.cancelTimer();
+        return new ArrayList<>(List.of(toDeltaEvent(buffer, buffer.pendingDelta.toString())));
     }
 
     private AgentEvent flushDelta(Buffer buffer) {
@@ -92,16 +118,6 @@ public class DeltaEventAggregator {
                 buffer.seed.deviceId(), buffer.seed.projectId(), buffer.seed.sessionId(), buffer.sequenceSupplier.getAsLong(),
                 buffer.seed.agentType(), AgentEventType.AGENT_MESSAGE_DELTA, null, null,
                 new AgentMessagePayload(original.messageId(), original.role(), content, true,
-                        original.extensions()),
-                buffer.seed.extensions());
-    }
-
-    private AgentEvent toFinalMessage(Buffer buffer) {
-        AgentMessagePayload original = (AgentMessagePayload) buffer.seed.payload();
-        return new AgentEvent(null, buffer.seed.traceId(), buffer.seed.tenantId(), buffer.seed.userId(),
-                buffer.seed.deviceId(), buffer.seed.projectId(), buffer.seed.sessionId(), buffer.sequenceSupplier.getAsLong(),
-                buffer.seed.agentType(), AgentEventType.AGENT_MESSAGE, null, null,
-                new AgentMessagePayload(original.messageId(), original.role(), buffer.fullMessage.toString(), false,
                         original.extensions()),
                 buffer.seed.extensions());
     }
@@ -137,6 +153,7 @@ public class DeltaEventAggregator {
     public synchronized void shutdown() {
         buffers.values().forEach(Buffer::cancelTimer);
         buffers.clear();
+        completedMessageKeys.clear();
     }
 
     private static class Buffer {
@@ -145,7 +162,6 @@ public class DeltaEventAggregator {
         private final LongSupplier sequenceSupplier;
         private final Consumer<AgentEvent> timedFlushConsumer;
         private final StringBuilder pendingDelta = new StringBuilder();
-        private final StringBuilder fullMessage = new StringBuilder();
         private Instant lastFlush = Instant.now();
         private ScheduledFuture<?> scheduledFuture;
 
