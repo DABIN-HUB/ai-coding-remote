@@ -5,11 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
-import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
-import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.session.AgentCapabilities;
@@ -22,6 +20,7 @@ import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessageKind;
 import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.config.AgentCodexProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
+import com.wangbin.ai.agent.daemon.event.AgentCommandLifecyclePolicy;
 import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
@@ -334,13 +333,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         if (!(commandId instanceof String text) || text.isBlank()) {
             return;
         }
-        if (event.type() == AgentEventType.SESSION_IDLE || event.type() == AgentEventType.SESSION_COMPLETED) {
-            context.clearPlatformCommand(text);
-            activeTurnIds.remove(context.platformSessionId());
-            return;
-        }
-        if (event.type() == AgentEventType.ERROR && event.payload() instanceof AgentErrorPayload payload
-                && !payload.retryable()) {
+        if (AgentCommandLifecyclePolicy.isTerminalForActiveCommand(event)) {
             context.clearPlatformCommand(text);
             activeTurnIds.remove(context.platformSessionId());
         }

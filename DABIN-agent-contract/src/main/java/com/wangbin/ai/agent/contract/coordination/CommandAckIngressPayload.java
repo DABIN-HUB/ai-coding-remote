@@ -17,8 +17,4 @@ public record CommandAckIngressPayload(
     public CommandAckIngressPayload {
         receivedAt = receivedAt == null ? Instant.now() : receivedAt;
     }
-
-    public CommandAckIngressPayload(String relayNodeId, String connectionId, CommandAck ack, Instant receivedAt) {
-        this(relayNodeId, connectionId, null, null, ack == null ? null : ack.deviceId(), ack, receivedAt);
-    }
 }

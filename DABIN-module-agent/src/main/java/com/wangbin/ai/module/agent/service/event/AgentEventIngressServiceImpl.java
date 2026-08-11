@@ -266,6 +266,7 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
     private boolean isAgentEventIdentityValid(AgentEventIngressPayload payload, AgentEvent event,
                                               AgentSessionDO session) {
         if (!equals(session.getTenantId(), payload.tenantId()) || !equals(session.getTenantId(), event.tenantId())
+                || !equals(session.getOwnerUserId(), payload.userId())
                 || !equals(session.getOwnerUserId(), event.userId())) {
             log.warn("reject AgentEvent ingress identity mismatch: sessionId={}, eventId={}",
                     event.sessionId(), event.eventId());
@@ -274,6 +275,8 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
         AgentDeviceDO device = deviceMapper.selectById(session.getDeviceId());
         AgentProjectDO project = projectMapper.selectById(session.getProjectId());
         if (device == null || project == null
+                || !equals(device.getTenantId(), session.getTenantId())
+                || !equals(project.getTenantId(), session.getTenantId())
                 || !equals(device.getDeviceId(), payload.deviceId())
                 || !equals(device.getDeviceId(), event.deviceId())
                 || !equals(project.getProjectId(), event.projectId())) {
@@ -288,6 +291,14 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
                                               AgentCommandDO command, AgentSessionDO session, AgentDeviceDO device) {
         if (session == null || device == null
                 || !equals(command.getTenantId(), payload.tenantId())
+                || !equals(session.getTenantId(), payload.tenantId())
+                || !equals(command.getTenantId(), session.getTenantId())
+                || !equals(device.getTenantId(), session.getTenantId())
+                || !equals(command.getOwnerUserId(), payload.userId())
+                || !equals(session.getOwnerUserId(), payload.userId())
+                || !equals(command.getOwnerUserId(), session.getOwnerUserId())
+                || !equals(command.getSessionId(), session.getId())
+                || !equals(command.getDeviceId(), session.getDeviceId())
                 || !equals(device.getDeviceId(), payload.deviceId())
                 || !equals(device.getDeviceId(), ack.deviceId())
                 || !equals(session.getSessionId(), ack.sessionId())) {

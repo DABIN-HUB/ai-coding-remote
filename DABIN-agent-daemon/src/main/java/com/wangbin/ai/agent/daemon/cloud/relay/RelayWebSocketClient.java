@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.command.AgentCommand;
 import com.wangbin.ai.agent.contract.command.CommandAck;
+import com.wangbin.ai.agent.contract.enums.EventPriority;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.protocol.AgentProtocol;
 import com.wangbin.ai.agent.contract.websocket.HelloPayload;
@@ -147,6 +148,7 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
             authTimeoutFuture = null;
             socketToClose = webSocket;
             webSocket = null;
+            outboundChannel.clear();
         }
         if (socketToClose != null) {
             socketToClose.sendClose(WebSocket.NORMAL_CLOSURE, "daemon stopped");
@@ -220,6 +222,7 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
         }
         boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.HELLO,
                 new HelloPayload(AgentProtocol.VERSION, ticket.ticket())),
+                OutboundReliability.TRANSIENT,
                 () -> handleDisconnect(credential, expectedGeneration, attemptId, socket,
                         new AgentConnectionException("failed to send HELLO", null)));
         if (!accepted) {
@@ -254,6 +257,7 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
                 socketToAbort = webSocket;
                 webSocket = null;
             }
+            outboundChannel.removeQueuedForSocket(source);
             connectInFlight = false;
             if (reconnectFuture != null && !reconnectFuture.isDone()) {
                 return;
@@ -291,6 +295,9 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
         }
         log.info("relay authenticated: deviceId={}, connectionId={}, relayNodeId={}, heartbeatInterval={}",
                 credential.getDeviceId(), payload.connectionId(), payload.relayNodeId(), payload.heartbeatInterval());
+        outboundChannel.replayReliable(source,
+                () -> handleAttemptSendFailure(credential, expectedGeneration, attemptId, source,
+                        new AgentConnectionException("failed to replay reliable daemon outbound message", null)));
     }
 
     private boolean isCurrentAttemptLocked(long expectedGeneration, long attemptId) {
@@ -308,20 +315,22 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
         return Duration.ofMillis(Math.min(capped + jitter, max.toMillis()));
     }
 
-    private boolean sendEnvelope(WebSocket socket, WsEnvelope<?> envelope, Runnable failureHandler) {
-        if (socket == null) {
-            return false;
-        }
-        return outboundChannel.enqueue(socket, envelope, failureHandler);
+    private boolean sendEnvelope(WebSocket socket, WsEnvelope<?> envelope, OutboundReliability reliability,
+                                 Runnable failureHandler) {
+        return outboundChannel.enqueue(socket, envelope, reliability, failureHandler);
     }
 
     @Override
     public boolean sendCommandAck(CommandAck ack) {
-        WebSocket socket = webSocket;
+        WebSocket socket = state.get() == RelayConnectionState.CONNECTED ? webSocket : null;
         DeviceCredentialState credential = activeCredential;
+        if (credential == null) {
+            return false;
+        }
         long expectedGeneration = generation.get();
         long attemptId = activeAttemptId;
         boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.COMMAND_ACK, ack),
+                OutboundReliability.RELIABLE,
                 () -> handleAttemptSendFailure(credential, expectedGeneration, attemptId, socket,
                         new AgentConnectionException("failed to send CommandAck", null)));
         if (!accepted) {
@@ -333,19 +342,30 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
 
     @Override
     public boolean sendAgentEvent(AgentEvent event) {
-        WebSocket socket = webSocket;
+        WebSocket socket = state.get() == RelayConnectionState.CONNECTED ? webSocket : null;
         DeviceCredentialState credential = activeCredential;
+        if (credential == null) {
+            return false;
+        }
         long expectedGeneration = generation.get();
         long attemptId = activeAttemptId;
+        OutboundReliability reliability = reliability(event);
         boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.AGENT_EVENT, event),
+                reliability,
                 () -> handleAttemptSendFailure(credential, expectedGeneration, attemptId, socket,
                         new AgentConnectionException("failed to send AgentEvent", null)));
-        if (!accepted && event != null && (event.priority() == com.wangbin.ai.agent.contract.enums.EventPriority.CRITICAL
-                || event.priority() == com.wangbin.ai.agent.contract.enums.EventPriority.IMPORTANT)) {
+        if (!accepted && reliability == OutboundReliability.RELIABLE) {
             handleAttemptSendFailure(credential, expectedGeneration, attemptId, socket,
                     new AgentConnectionException("daemon outbound queue rejected reliable AgentEvent", null));
         }
         return accepted;
+    }
+
+    private OutboundReliability reliability(AgentEvent event) {
+        if (event != null && (event.priority() == EventPriority.CRITICAL || event.priority() == EventPriority.IMPORTANT)) {
+            return OutboundReliability.RELIABLE;
+        }
+        return OutboundReliability.TRANSIENT;
     }
 
     private void handleAttemptSendFailure(DeviceCredentialState credential, long expectedGeneration, long attemptId,
@@ -429,6 +449,7 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
                     WsEnvelope<PingPayload> ping = objectMapper.readValue(json, envelopeType(PingPayload.class));
                     boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.PONG,
                                     new PongPayload(ping.payload() == null ? null : ping.payload().pingId(), Instant.now())),
+                            OutboundReliability.TRANSIENT,
                             () -> handleDisconnect(credential, expectedGeneration, attemptId, socket,
                                     new AgentConnectionException("failed to send PONG", null)));
                     if (!accepted) {

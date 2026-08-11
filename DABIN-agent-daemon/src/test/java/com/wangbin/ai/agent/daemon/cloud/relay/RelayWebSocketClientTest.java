@@ -3,6 +3,15 @@ package com.wangbin.ai.agent.daemon.cloud.relay;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.wangbin.ai.agent.contract.command.CommandAck;
+import com.wangbin.ai.agent.contract.command.CommandAckStatus;
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
+import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
+import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.enums.EventPriority;
+import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
+import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.websocket.WelcomePayload;
 import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
 import com.wangbin.ai.agent.contract.websocket.WsMessageType;
@@ -38,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RelayWebSocketClientTest {
 
     private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
     private static final String TEST_DEVICE_ID = "dev-1";
     private static final String TEST_CREDENTIAL_ID = "cred-1";
     private static final String TEST_CREDENTIAL_SECRET = "secret";
@@ -45,6 +55,9 @@ class RelayWebSocketClientTest {
     private static final String TEST_RELAY_NODE_ID = "relay-1";
     private static final String TEST_CONNECTION_ID = "conn-1";
     private static final String TEST_CONNECTION_ID_SECOND = "conn-2";
+    private static final String TEST_PROJECT_ID = "prj-1";
+    private static final String TEST_SESSION_ID = "ses-1";
+    private static final String TEST_COMMAND_ID = "cmd-1";
     private static final String TEST_RELAY_TICKET_PREFIX = "ticket-";
     private static final String NETWORK_FAILURE_MESSAGE = "network";
     private static final long TEST_RELAY_TICKET_TTL_SECONDS = 60L;
@@ -186,6 +199,7 @@ class RelayWebSocketClientTest {
         try {
             client.start(credential());
             waitUntil(() -> connector.connectCount.get() == 1);
+            waitUntil(() -> captureScheduler.latestAuthTimeout.get() != null);
             Runnable firstAuthTimeout = captureScheduler.latestAuthTimeout.get();
             Attempt firstAttempt = connector.attempt(0);
             firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
@@ -203,6 +217,55 @@ class RelayWebSocketClientTest {
             client.stop();
             captureScheduler.shutdownNow();
         }
+    }
+
+    @Test
+    void reliableBusinessMessagesReplayAfterReconnectWithOriginalOrderAndSequence() throws Exception {
+        AgentDaemonProperties properties = properties();
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+        FakeConnector connector = new FakeConnector(false);
+        RelayWebSocketClient client = new RelayWebSocketClient(objectMapper, properties,
+                controlPlaneClient, scheduler, connector);
+
+        client.start(credential());
+        waitUntil(() -> connector.connectCount.get() == 1);
+        Attempt firstAttempt = connector.attempt(0);
+        sendWelcome(firstAttempt, TEST_CONNECTION_ID);
+        waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
+        firstAttempt.socket().failNextCommandAck.set(true);
+
+        assertThat(client.sendCommandAck(ack())).isTrue();
+        waitUntil(() -> connector.connectCount.get() == 2);
+        assertThat(client.sendAgentEvent(sessionEvent("event-started", 1, AgentEventType.SESSION_STARTED))).isTrue();
+        assertThat(client.sendAgentEvent(sessionEvent("event-final", 6, AgentEventType.SESSION_IDLE))).isTrue();
+        assertThat(client.sendAgentEvent(deltaEvent("event-delta", 2))).isFalse();
+
+        Attempt secondAttempt = connector.latestAttempt();
+        sendWelcome(secondAttempt, TEST_CONNECTION_ID_SECOND);
+        waitUntil(() -> secondAttempt.socket().sentPayloads.size() >= 4);
+
+        assertThat(secondAttempt.socket().sentPayloads.get(0)).contains("\"type\":\"HELLO\"");
+        assertThat(secondAttempt.socket().sentPayloads.get(1)).contains("\"type\":\"COMMAND_ACK\"", TEST_COMMAND_ID);
+        assertThat(secondAttempt.socket().sentPayloads.get(2)).contains("\"type\":\"AGENT_EVENT\"",
+                "\"eventId\":\"event-started\"", "\"seq\":1");
+        assertThat(secondAttempt.socket().sentPayloads.get(3)).contains("\"type\":\"AGENT_EVENT\"",
+                "\"eventId\":\"event-final\"", "\"seq\":6");
+        assertThat(secondAttempt.socket().sentPayloads)
+                .noneSatisfy(payload -> assertThat(payload).contains("event-delta"));
+
+        int sentAfterReplay = secondAttempt.socket().sentPayloads.size();
+        secondAttempt.listener().onError(secondAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
+        waitUntil(() -> connector.connectCount.get() == 3);
+        sendWelcome(connector.latestAttempt(), "conn-3");
+        sleep(properties.getCloud().getReconnectInitialDelay().multipliedBy(2));
+
+        String thirdAttemptPayloads = String.join("\n", connector.latestAttempt().socket().sentPayloads);
+        assertThat(thirdAttemptPayloads)
+                .doesNotContain("event-started")
+                .doesNotContain("event-final")
+                .doesNotContain(TEST_COMMAND_ID);
+        assertThat(sentAfterReplay).isEqualTo(4);
+        client.stop();
     }
 
     private AgentDaemonProperties properties() {
@@ -249,6 +312,25 @@ class RelayWebSocketClientTest {
         attempt.listener().onText(attempt.socket(), welcome, true);
     }
 
+    private CommandAck ack() {
+        return new CommandAck(TEST_COMMAND_ID, TEST_SESSION_ID, TEST_DEVICE_ID, CommandAckStatus.ACCEPTED,
+                "ACCEPTED", "accepted", Instant.now(), java.util.Map.of());
+    }
+
+    private AgentEvent sessionEvent(String eventId, long seq, AgentEventType type) {
+        return new AgentEvent(eventId, "trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID,
+                TEST_SESSION_ID, seq, AgentType.CODEX, type, EventPriority.IMPORTANT, Instant.now(),
+                new SessionPayload("native-1", type == AgentEventType.SESSION_IDLE
+                        ? AgentSessionStatus.IDLE : AgentSessionStatus.RUNNING, null, java.util.Map.of()),
+                java.util.Map.of());
+    }
+
+    private AgentEvent deltaEvent(String eventId, long seq) {
+        return new AgentEvent(eventId, "trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID,
+                TEST_SESSION_ID, seq, AgentType.CODEX, AgentEventType.AGENT_MESSAGE_DELTA, null, Instant.now(),
+                new AgentMessagePayload("msg-1", "assistant", "delta", true, java.util.Map.of()), java.util.Map.of());
+    }
+
     private boolean connectInFlight(RelayWebSocketClient client) throws Exception {
         Field field = RelayWebSocketClient.class.getDeclaredField("connectInFlight");
         field.setAccessible(true);
@@ -282,6 +364,8 @@ class RelayWebSocketClientTest {
     private static final class FakeConnector implements RelayWebSocketConnector {
 
         private final boolean failSend;
+        private final AtomicBoolean failNextCommandAck = new AtomicBoolean();
+        private final List<String> sentPayloads = new CopyOnWriteArrayList<>();
         private final AtomicInteger connectCount = new AtomicInteger();
         private final AtomicBoolean completeConnectImmediately = new AtomicBoolean(true);
         private final List<Attempt> attempts = new CopyOnWriteArrayList<>();
@@ -338,6 +422,8 @@ class RelayWebSocketClientTest {
     private static final class FakeWebSocket implements WebSocket {
 
         private final boolean failSend;
+        private final AtomicBoolean failNextCommandAck = new AtomicBoolean();
+        private final List<String> sentPayloads = new CopyOnWriteArrayList<>();
 
         private FakeWebSocket(boolean failSend) {
             this.failSend = failSend;
@@ -345,7 +431,10 @@ class RelayWebSocketClientTest {
 
         @Override
         public CompletableFuture<WebSocket> sendText(CharSequence data, boolean last) {
-            if (failSend) {
+            String payload = data.toString();
+            sentPayloads.add(payload);
+            if (failSend || (failNextCommandAck.compareAndSet(true, false)
+                    && payload.contains("\"type\":\"COMMAND_ACK\""))) {
                 CompletableFuture<WebSocket> failed = new CompletableFuture<>();
                 failed.completeExceptionally(new RuntimeException("send failed"));
                 return failed;

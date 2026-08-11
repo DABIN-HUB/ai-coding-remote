@@ -30,6 +30,9 @@ public class AgentDaemonProperties {
     @Min(1)
     private int outboundQueueCapacity = 1024;
 
+    @Min(1)
+    private int reliableOutboundCapacity = 512;
+
     private final Smoke smoke = new Smoke();
     private final Cloud cloud = new Cloud();
     @Valid
@@ -81,6 +84,14 @@ public class AgentDaemonProperties {
 
     public void setOutboundQueueCapacity(int outboundQueueCapacity) {
         this.outboundQueueCapacity = outboundQueueCapacity;
+    }
+
+    public int getReliableOutboundCapacity() {
+        return reliableOutboundCapacity;
+    }
+
+    public void setReliableOutboundCapacity(int reliableOutboundCapacity) {
+        this.reliableOutboundCapacity = reliableOutboundCapacity;
     }
 
     public Smoke getSmoke() {

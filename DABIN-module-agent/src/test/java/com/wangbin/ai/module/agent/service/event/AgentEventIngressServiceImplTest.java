@@ -185,6 +185,81 @@ class AgentEventIngressServiceImplTest {
         assertThat(session.getLastEventSeq()).isEqualTo(1L);
     }
 
+    @Test
+    void agentEventSourceUserMismatchIsRejectedWithoutDbUpdate() {
+        AgentSessionDO session = session(0L);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_IDLE, 1,
+                        new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of())),
+                TEST_TENANT_ID, 999L, TEST_DEVICE_ID));
+
+        verify(sessionMapper, never()).updateById(any(AgentSessionDO.class));
+        verifyNoInteractions(messageMapper);
+    }
+
+    @Test
+    void agentEventPayloadUserMismatchIsRejectedWithoutDbUpdate() {
+        AgentSessionDO session = session(0L);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+
+        service.handleAgentEvent(payload(eventWithIdentity(AgentEventType.SESSION_IDLE, 1, TEST_TENANT_ID,
+                        999L, TEST_DEVICE_ID, TEST_PROJECT_ID),
+                TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID));
+
+        verify(sessionMapper, never()).updateById(any(AgentSessionDO.class));
+        verifyNoInteractions(messageMapper);
+    }
+
+    @Test
+    void agentEventTenantDeviceOrProjectMismatchIsRejectedWithoutDbUpdate() {
+        AgentSessionDO session = session(0L);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+
+        service.handleAgentEvent(payload(eventWithIdentity(AgentEventType.SESSION_IDLE, 1, 2L,
+                        TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID), 2L, TEST_USER_ID, TEST_DEVICE_ID));
+        service.handleAgentEvent(payload(eventWithIdentity(AgentEventType.SESSION_IDLE, 2, TEST_TENANT_ID,
+                        TEST_USER_ID, "other-device", TEST_PROJECT_ID),
+                TEST_TENANT_ID, TEST_USER_ID, "other-device"));
+        service.handleAgentEvent(payload(eventWithIdentity(AgentEventType.SESSION_IDLE, 3, TEST_TENANT_ID,
+                        TEST_USER_ID, TEST_DEVICE_ID, "other-project"),
+                TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID));
+
+        verify(sessionMapper, never()).updateById(any(AgentSessionDO.class));
+        verifyNoInteractions(messageMapper);
+    }
+
+    @Test
+    void commandAckSourceUserMismatchIsRejectedWithoutDbUpdate() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO command = command(AgentCommandDbStatus.ROUTING);
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(command);
+        when(sessionMapper.selectById(TEST_SESSION_DB_ID)).thenReturn(session);
+
+        service.handleCommandAck(ackPayload(new CommandAck(TEST_COMMAND_ID, TEST_SESSION_ID, TEST_DEVICE_ID,
+                CommandAckStatus.ACCEPTED, "ACCEPTED", "accepted", null, Map.of()),
+                TEST_TENANT_ID, 999L, TEST_DEVICE_ID));
+
+        assertThat(command.getCommandStatus()).isEqualTo(AgentCommandDbStatus.ROUTING.name());
+        assertThat(command.getAckedTime()).isNull();
+        verify(commandMapper, never()).updateById(any(AgentCommandDO.class));
+    }
+
+    @Test
+    void matchingCommandAckTransitionsCreatedCommandToAcked() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO command = command(AgentCommandDbStatus.CREATED);
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(command);
+        when(sessionMapper.selectById(TEST_SESSION_DB_ID)).thenReturn(session);
+
+        service.handleCommandAck(ackPayload(new CommandAck(TEST_COMMAND_ID, TEST_SESSION_ID, TEST_DEVICE_ID,
+                CommandAckStatus.ACCEPTED, "ACCEPTED", "accepted", null, Map.of())));
+
+        assertThat(command.getCommandStatus()).isEqualTo(AgentCommandDbStatus.ACKED.name());
+        assertThat(command.getAckedTime()).isNotNull();
+        verify(commandMapper).updateById(command);
+    }
+
     private AgentSessionDO session(Long lastEventSeq) {
         AgentSessionDO session = new AgentSessionDO();
         session.setId(TEST_SESSION_DB_ID);
@@ -238,17 +313,32 @@ class AgentEventIngressServiceImplTest {
                 extensions);
     }
 
+    private AgentEvent eventWithIdentity(AgentEventType type, long seq, Long tenantId, Long userId,
+                                         String deviceId, String projectId) {
+        return new AgentEvent(null, "trace-1", tenantId, userId, deviceId, projectId,
+                TEST_SESSION_ID, seq, AgentType.CODEX, type, priority(type), null,
+                new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()), Map.of());
+    }
+
     private EventPriority priority(AgentEventType type) {
         return type == AgentEventType.AGENT_MESSAGE_DELTA ? EventPriority.TRANSIENT : EventPriority.IMPORTANT;
     }
 
     private AgentEventIngressPayload payload(AgentEvent event) {
-        return new AgentEventIngressPayload(TEST_RELAY_NODE_ID, TEST_CONNECTION_ID, TEST_TENANT_ID,
-                TEST_USER_ID, TEST_DEVICE_ID, event, null);
+        return payload(event, TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID);
+    }
+
+    private AgentEventIngressPayload payload(AgentEvent event, Long tenantId, Long userId, String deviceId) {
+        return new AgentEventIngressPayload(TEST_RELAY_NODE_ID, TEST_CONNECTION_ID, tenantId,
+                userId, deviceId, event, null);
     }
 
     private CommandAckIngressPayload ackPayload(CommandAck ack) {
-        return new CommandAckIngressPayload(TEST_RELAY_NODE_ID, TEST_CONNECTION_ID, TEST_TENANT_ID,
-                TEST_USER_ID, TEST_DEVICE_ID, ack, null);
+        return ackPayload(ack, TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID);
+    }
+
+    private CommandAckIngressPayload ackPayload(CommandAck ack, Long tenantId, Long userId, String deviceId) {
+        return new CommandAckIngressPayload(TEST_RELAY_NODE_ID, TEST_CONNECTION_ID, tenantId,
+                userId, deviceId, ack, null);
     }
 }

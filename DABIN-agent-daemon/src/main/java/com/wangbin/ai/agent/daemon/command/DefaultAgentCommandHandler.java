@@ -3,16 +3,14 @@ package com.wangbin.ai.agent.daemon.command;
 import com.wangbin.ai.agent.contract.command.*;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.CommandType;
-import com.wangbin.ai.agent.contract.enums.EventPriority;
-import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
-import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.session.PromptCommand;
 import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
 import com.wangbin.ai.agent.daemon.cloud.relay.DaemonOutboundSender;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
+import com.wangbin.ai.agent.daemon.event.AgentCommandLifecyclePolicy;
 import com.wangbin.ai.agent.daemon.project.LocalProject;
 import com.wangbin.ai.agent.daemon.project.LocalProjectRegistry;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
@@ -118,24 +116,13 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     }
 
     private void handleAgentEvent(DaemonOutboundSender outboundSender, AgentEvent event) {
-        boolean accepted = outboundSender.sendAgentEvent(event);
-        if (isCommandTerminalEvent(event)) {
+        outboundSender.sendAgentEvent(event);
+        if (AgentCommandLifecyclePolicy.isTerminalForActiveCommand(event)) {
             Object commandId = event.extensions().get(AgentEventExtensionKeys.PLATFORM_COMMAND_ID);
             if (commandId instanceof String text && !text.isBlank()) {
                 activeSessionCommands.remove(event.sessionId(), text);
             }
         }
-        if (!accepted && (event.priority() == EventPriority.CRITICAL || event.priority() == EventPriority.IMPORTANT)) {
-            activeSessionCommands.remove(event.sessionId());
-        }
-    }
-
-    private boolean isCommandTerminalEvent(AgentEvent event) {
-        if (event.type() == AgentEventType.ERROR && event.payload() instanceof AgentErrorPayload payload) {
-            return !payload.retryable();
-        }
-        return event.type() == AgentEventType.SESSION_IDLE
-                || event.type() == AgentEventType.SESSION_COMPLETED;
     }
 
     private boolean isIdentityValid(AgentCommand command, DeviceCredentialState credential) {

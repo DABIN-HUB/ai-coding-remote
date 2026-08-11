@@ -9,6 +9,8 @@ agent:
     process-io-threads: 4
     event-aggregation-window: 100ms
     event-aggregation-max-chars: 160
+    outbound-queue-capacity: 1024
+    reliable-outbound-capacity: 512
     projects: []
     cloud:
       control-plane-url: http://127.0.0.1:48080

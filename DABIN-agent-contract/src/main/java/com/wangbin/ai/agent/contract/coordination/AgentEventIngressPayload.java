@@ -17,9 +17,4 @@ public record AgentEventIngressPayload(
     public AgentEventIngressPayload {
         receivedAt = receivedAt == null ? Instant.now() : receivedAt;
     }
-
-    public AgentEventIngressPayload(String relayNodeId, String connectionId, AgentEvent event, Instant receivedAt) {
-        this(relayNodeId, connectionId, event == null ? null : event.tenantId(),
-                event == null ? null : event.userId(), event == null ? null : event.deviceId(), event, receivedAt);
-    }
 }

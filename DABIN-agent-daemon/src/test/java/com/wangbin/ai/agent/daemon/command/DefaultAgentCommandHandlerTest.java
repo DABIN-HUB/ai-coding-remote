@@ -3,9 +3,14 @@ package com.wangbin.ai.agent.daemon.command;
 import com.wangbin.ai.agent.contract.command.*;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.enums.EventPriority;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
+import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
+import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.session.*;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
 import com.wangbin.ai.agent.daemon.cloud.relay.DaemonOutboundSender;
@@ -17,6 +22,7 @@ import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -154,6 +160,60 @@ class DefaultAgentCommandHandlerTest {
         assertThat(outboundSender.acks.get(1).code()).isEqualTo("SESSION_BUSY");
     }
 
+    @Test
+    void importantOutboundFailureDoesNotReleaseActiveCommandUntilSessionIdle() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter, true, false);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        adapter.emit(sessionEvent(AgentEventType.SESSION_STARTED, TEST_COMMAND_ID));
+        handler.handle(promptCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+        adapter.emit(sessionEvent(AgentEventType.SESSION_IDLE, TEST_COMMAND_ID));
+        handler.handle(promptCommand("cmd-3"), credential(), outboundSender);
+
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.REJECTED, CommandAckStatus.ACCEPTED);
+        assertThat(outboundSender.acks.get(1).code()).isEqualTo("SESSION_BUSY");
+        assertThat(adapter.sendPromptCalls).hasValue(2);
+    }
+
+    @Test
+    void retryableErrorKeepsSessionBusyAndTerminalErrorReleasesIt() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        adapter.emit(errorEvent(TEST_COMMAND_ID, true));
+        handler.handle(promptCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+        adapter.emit(errorEvent(TEST_COMMAND_ID, false));
+        handler.handle(promptCommand("cmd-3"), credential(), outboundSender);
+
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.REJECTED, CommandAckStatus.ACCEPTED);
+        assertThat(outboundSender.acks.get(1).code()).isEqualTo("SESSION_BUSY");
+        assertThat(adapter.sendPromptCalls).hasValue(2);
+    }
+
+    @Test
+    void sessionCompletedReleasesActiveCommand() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        adapter.emit(sessionEvent(AgentEventType.SESSION_COMPLETED, TEST_COMMAND_ID));
+        handler.handle(promptCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.ACCEPTED);
+        assertThat(adapter.sendPromptCalls).hasValue(2);
+    }
+
     private AgentCommand promptCommand(String commandId) {
         return promptCommand(commandId, TEST_SESSION_ID, TEST_DEVICE_ID);
     }
@@ -174,6 +234,24 @@ class DefaultAgentCommandHandlerTest {
         credential.setTenantId(TEST_TENANT_ID);
         credential.setDeviceId(TEST_DEVICE_ID);
         return credential;
+    }
+
+    private AgentEvent sessionEvent(AgentEventType type, String commandId) {
+        AgentSessionStatus status = type == AgentEventType.SESSION_IDLE
+                ? AgentSessionStatus.IDLE : AgentSessionStatus.RUNNING;
+        return new AgentEvent("event-" + type + "-" + commandId, "trace-1", TEST_TENANT_ID, TEST_USER_ID,
+                TEST_DEVICE_ID, TEST_PROJECT_ID, TEST_SESSION_ID, 1L, AgentType.CODEX, type,
+                EventPriority.IMPORTANT, Instant.now(),
+                new SessionPayload("native-1", status, null, Map.of()),
+                Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, commandId));
+    }
+
+    private AgentEvent errorEvent(String commandId, boolean retryable) {
+        return new AgentEvent("event-error-" + retryable, "trace-1", TEST_TENANT_ID, TEST_USER_ID,
+                TEST_DEVICE_ID, TEST_PROJECT_ID, TEST_SESSION_ID, 1L, AgentType.CODEX, AgentEventType.ERROR,
+                EventPriority.IMPORTANT, Instant.now(),
+                new AgentErrorPayload("codex_error", "error", retryable, Map.of()),
+                Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, commandId));
     }
 
     private LocalProjectRegistry registry() {
@@ -248,8 +326,13 @@ class DefaultAgentCommandHandlerTest {
         }
 
         private RecordingOutboundSender(RecordingAdapter adapter, boolean acceptCommandAcks) {
+            this(adapter, acceptCommandAcks, true);
+        }
+
+        private RecordingOutboundSender(RecordingAdapter adapter, boolean acceptCommandAcks, boolean acceptAgentEvents) {
             this.adapter = adapter;
             this.acceptCommandAcks = acceptCommandAcks;
+            this.acceptAgentEvents = acceptAgentEvents;
         }
 
         @Override
@@ -263,14 +346,17 @@ class DefaultAgentCommandHandlerTest {
 
         @Override
         public boolean sendAgentEvent(AgentEvent event) {
-            return true;
+            return acceptAgentEvents;
         }
+
+        private final boolean acceptAgentEvents;
     }
 
     private static final class RecordingAdapter implements CodingAgentAdapter {
 
         private final AtomicInteger startSessionCalls = new AtomicInteger();
         private final AtomicInteger sendPromptCalls = new AtomicInteger();
+        private final Sinks.Many<AgentEvent> eventSink = Sinks.many().multicast().directBestEffort();
         private boolean failSendPrompt;
 
         @Override
@@ -309,11 +395,15 @@ class DefaultAgentCommandHandlerTest {
 
         @Override
         public Flux<AgentEvent> events(String sessionId) {
-            return Flux.empty();
+            return eventSink.asFlux();
         }
 
         @Override
         public void closeSession(String sessionId) {
+        }
+
+        private void emit(AgentEvent event) {
+            eventSink.tryEmitNext(event);
         }
     }
 

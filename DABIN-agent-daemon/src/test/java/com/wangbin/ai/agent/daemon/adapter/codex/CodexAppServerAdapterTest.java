@@ -16,6 +16,7 @@ import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
 import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
+import com.wangbin.ai.agent.daemon.exception.AgentSessionException;
 import com.wangbin.ai.agent.daemon.process.ManagedProcess;
 import com.wangbin.ai.agent.daemon.process.ProcessState;
 import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
@@ -43,6 +44,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CodexAppServerAdapterTest {
 
@@ -176,6 +178,46 @@ class CodexAppServerAdapterTest {
                 .hasSize(1);
         assertThat(rpcClient.requestParams.stream()
                 .filter(params -> "cmd-456".equals(params.path("clientUserMessageId").asText(null))))
+                .hasSize(1);
+    }
+
+    @Test
+    void retryableErrorKeepsActiveCommandAndTerminalErrorClearsIt(@TempDir Path workspace) throws Exception {
+        TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
+        CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
+        var session = adapter.startSession(startRequest(workspace));
+
+        adapter.sendPrompt(session.platformSessionId(), new PromptCommand("cmd-123", "hello", Map.of()));
+        adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ERROR,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "code": "responseStreamDisconnected",
+                          "message": "temporary disconnect",
+                          "willRetry": true
+                        }
+                        """)));
+
+        assertThatThrownBy(() -> adapter.sendPrompt(session.platformSessionId(),
+                new PromptCommand("cmd-456", "busy", Map.of())))
+                .isInstanceOf(AgentSessionException.class);
+
+        adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ERROR,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "code": "codex_error",
+                          "message": "terminal failure",
+                          "willRetry": false
+                        }
+                        """)));
+        adapter.sendPrompt(session.platformSessionId(), new PromptCommand("cmd-789", "next", Map.of()));
+
+        assertThat(rpcClient.requestParams.stream()
+                .filter(params -> "cmd-123".equals(params.path("clientUserMessageId").asText(null))))
+                .hasSize(1);
+        assertThat(rpcClient.requestParams.stream()
+                .filter(params -> "cmd-789".equals(params.path("clientUserMessageId").asText(null))))
                 .hasSize(1);
     }
 
