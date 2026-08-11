@@ -4,10 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.coordination.*;
 import com.wangbin.ai.agent.relay.config.AgentRelayProperties;
 import com.wangbin.ai.agent.relay.connection.ConnectionDescriptor;
-import org.redisson.api.RBucket;
-import org.redisson.api.RScript;
-import org.redisson.api.RedissonClient;
-import org.redisson.client.codec.StringCodec;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -33,14 +31,16 @@ public class RelayPresenceRegistry {
             end
             return 0
             """;
+    private static final DefaultRedisScript<Long> COMPARE_DELETE_REDIS_SCRIPT =
+            new DefaultRedisScript<>(COMPARE_DELETE_SCRIPT, Long.class);
 
-    private final RedissonClient redissonClient;
+    private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final AgentRelayProperties properties;
 
-    public RelayPresenceRegistry(RedissonClient redissonClient, ObjectMapper objectMapper,
+    public RelayPresenceRegistry(StringRedisTemplate stringRedisTemplate, ObjectMapper objectMapper,
                                  AgentRelayProperties properties) {
-        this.redissonClient = redissonClient;
+        this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
     }
@@ -74,23 +74,22 @@ public class RelayPresenceRegistry {
                 compareDelete(AgentCoordinationKeys.devicePresence(descriptor.deviceId()), descriptor.connectionId());
                 compareDelete(AgentCoordinationKeys.deviceRoute(descriptor.deviceId()), descriptor.connectionId());
             } else if (descriptor.userId() != null) {
-                redissonClient.getBucket(AgentCoordinationKeys.userRoute(descriptor.tenantId(),
-                        descriptor.userId(), descriptor.connectionId())).delete();
+                stringRedisTemplate.delete(AgentCoordinationKeys.userRoute(descriptor.tenantId(),
+                        descriptor.userId(), descriptor.connectionId()));
             }
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private void setJson(String key, Object value) {
         try {
-            RBucket<String> bucket = redissonClient.getBucket(key);
-            bucket.set(objectMapper.writeValueAsString(value), properties.getPresenceTtl());
+            stringRedisTemplate.opsForValue().set(key, objectMapper.writeValueAsString(value),
+                    properties.getPresenceTtl());
         } catch (Exception ex) {
             throw new IllegalStateException("failed to write relay presence", ex);
         }
     }
 
     private void compareDelete(String key, String connectionId) {
-        redissonClient.getScript(StringCodec.INSTANCE).eval(RScript.Mode.READ_WRITE, COMPARE_DELETE_SCRIPT,
-                RScript.ReturnType.LONG, List.of(key), connectionId);
+        stringRedisTemplate.execute(COMPARE_DELETE_REDIS_SCRIPT, List.of(key), connectionId);
     }
 }

@@ -327,6 +327,7 @@ DABIN:
     enable: true
     ignore-urls:
       - /jmreport/* # 积木报表，无法携带租户编号
+      - /admin-api/agent/device/pair # Daemon pairing is authenticated by one-time pairing code before tenant is known
     ignore-visit-urls:
       - /admin-api/system/user/profile/**
       - /admin-api/system/auth/**

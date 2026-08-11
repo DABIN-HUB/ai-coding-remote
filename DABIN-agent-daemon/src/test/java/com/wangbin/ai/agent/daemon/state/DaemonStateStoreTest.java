@@ -3,8 +3,8 @@ package com.wangbin.ai.agent.daemon.state;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -22,11 +22,9 @@ class DaemonStateStoreTest {
     private static final String CREDENTIALS_DIR = "credentials";
     private static final String DEVICE_CREDENTIAL_FILE = "device-credential.json";
 
-    @TempDir
-    Path tempDir;
-
     @Test
-    void installationIdIsStableAcrossStoreInstances() {
+    void installationIdIsStableAcrossStoreInstances() throws IOException {
+        Path tempDir = testHome("installation-");
         withUserHome(tempDir, () -> {
             DaemonStateStore first = store();
             String installationId = first.getOrCreateInstallationId();
@@ -37,7 +35,8 @@ class DaemonStateStoreTest {
     }
 
     @Test
-    void credentialStatePersistsWithoutLeakingSecretInToString() {
+    void credentialStatePersistsWithoutLeakingSecretInToString() throws IOException {
+        Path tempDir = testHome("credential-");
         withUserHome(tempDir, () -> {
             DaemonStateStore stateStore = store();
             DeviceCredentialState state = stateStore.newCredential(TEST_TENANT_ID, TEST_DEVICE_ID,
@@ -51,6 +50,12 @@ class DaemonStateStoreTest {
             assertThat(Files.exists(tempDir.resolve(DAEMON_BASE_DIR)
                     .resolve(CREDENTIALS_DIR).resolve(DEVICE_CREDENTIAL_FILE))).isTrue();
         });
+    }
+
+    private Path testHome(String prefix) throws IOException {
+        Path baseDir = Path.of("target", "daemon-state-store-test").toAbsolutePath().normalize();
+        Files.createDirectories(baseDir);
+        return Files.createTempDirectory(baseDir, prefix);
     }
 
     private DaemonStateStore store() {

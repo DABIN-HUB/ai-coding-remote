@@ -3,7 +3,6 @@ package com.wangbin.ai.agent.daemon.workspace;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.security.LocalPolicy;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -15,11 +14,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class DefaultWorkspaceManagerTest {
 
-    @TempDir
-    Path tempDir;
-
     @Test
     void validatesExistingWorkspaceUsingRealPath() throws Exception {
+        Path tempDir = testRoot("valid-");
         Path allowedRoot = Files.createDirectory(tempDir.resolve("allowed")).toRealPath();
         DefaultWorkspaceManager manager = new DefaultWorkspaceManager(allowOnly(allowedRoot));
 
@@ -30,6 +27,7 @@ class DefaultWorkspaceManagerTest {
 
     @Test
     void rejectsPathTraversalOutsideWorkspace() throws Exception {
+        Path tempDir = testRoot("traversal-");
         Path workspace = Files.createDirectory(tempDir.resolve("workspace")).toRealPath();
         Path outside = Files.createDirectory(tempDir.resolve("outside")).toRealPath();
         Files.writeString(outside.resolve("secret.txt"), "secret");
@@ -42,6 +40,7 @@ class DefaultWorkspaceManagerTest {
 
     @Test
     void rejectsSymlinkEscapingWorkspace() throws Exception {
+        Path tempDir = testRoot("symlink-");
         Path workspace = Files.createDirectory(tempDir.resolve("workspace")).toRealPath();
         Path outside = Files.createDirectory(tempDir.resolve("outside")).toRealPath();
         Path target = Files.writeString(outside.resolve("secret.txt"), "secret").toRealPath();
@@ -56,6 +55,12 @@ class DefaultWorkspaceManagerTest {
         assertThatThrownBy(() -> manager.resolveWithinWorkspace(workspace, "linked-secret.txt"))
                 .isInstanceOf(AgentCapabilityException.class)
                 .hasMessageContaining("path escapes workspace");
+    }
+
+    private Path testRoot(String prefix) throws IOException {
+        Path baseDir = Path.of("target", "workspace-manager-test").toAbsolutePath().normalize();
+        Files.createDirectories(baseDir);
+        return Files.createTempDirectory(baseDir, prefix);
     }
 
     private LocalPolicy allowOnly(Path allowedRoot) {

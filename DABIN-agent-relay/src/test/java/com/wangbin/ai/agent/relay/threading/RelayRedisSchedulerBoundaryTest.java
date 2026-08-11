@@ -14,7 +14,7 @@ class RelayRedisSchedulerBoundaryTest {
         String source = Files.readString(Path.of(
                 "src/main/java/com/wangbin/ai/agent/relay/auth/RelayTicketAuthenticator.java"));
 
-        assertThat(source).contains("bucket.getAndDelete()");
+        assertThat(source).contains("opsForValue().getAndDelete");
         assertThat(source).contains("subscribeOn(Schedulers.boundedElastic())");
     }
 
@@ -23,8 +23,8 @@ class RelayRedisSchedulerBoundaryTest {
         String source = Files.readString(Path.of(
                 "src/main/java/com/wangbin/ai/agent/relay/presence/RelayPresenceRegistry.java"));
 
-        assertThat(source).contains("bucket.set(");
-        assertThat(source).contains("getScript(StringCodec.INSTANCE).eval");
+        assertThat(source).contains("stringRedisTemplate.opsForValue().set");
+        assertThat(source).contains("stringRedisTemplate.execute");
         assertThat(source).contains("subscribeOn(Schedulers.boundedElastic())");
     }
 }

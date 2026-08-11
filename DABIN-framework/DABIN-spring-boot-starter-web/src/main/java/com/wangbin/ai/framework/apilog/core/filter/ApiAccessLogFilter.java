@@ -9,6 +9,7 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.wangbin.ai.framework.apilog.core.annotation.ApiAccessLog;
 import com.wangbin.ai.framework.apilog.core.enums.OperateTypeEnum;
+import com.wangbin.ai.framework.apilog.core.util.ApiAccessLogSanitizer;
 import com.wangbin.ai.framework.common.biz.infra.logger.ApiAccessLogCommonApi;
 import com.wangbin.ai.framework.common.biz.infra.logger.dto.ApiAccessLogCreateReqDTO;
 import com.wangbin.ai.framework.common.exception.enums.GlobalErrorCodeConstants;
@@ -130,13 +131,13 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
         Boolean requestEnable = accessLogAnnotation != null ? accessLogAnnotation.requestEnable() : Boolean.TRUE;
         if (!BooleanUtil.isFalse(requestEnable)) { // 默认记录，所以判断 !false
             Map<String, Object> requestParams = MapUtil.<String, Object>builder()
-                    .put("query", sanitizeMap(queryString, sanitizeKeys))
-                    .put("body", sanitizeJson(requestBody, sanitizeKeys)).build();
+                    .put("query", ApiAccessLogSanitizer.sanitizeMap(queryString, sanitizeKeys))
+                    .put("body", ApiAccessLogSanitizer.sanitizeJson(requestBody, sanitizeKeys)).build();
             accessLog.setRequestParams(toJsonString(requestParams));
         }
         Boolean responseEnable = accessLogAnnotation != null ? accessLogAnnotation.responseEnable() : Boolean.FALSE;
         if (BooleanUtil.isTrue(responseEnable)) { // 默认不记录，默认强制要求 true
-            accessLog.setResponseBody(sanitizeJson(result, sanitizeKeys));
+            accessLog.setResponseBody(ApiAccessLogSanitizer.sanitizeJson(result, sanitizeKeys));
         }
         // 持续时间
         accessLog.setBeginTime(beginTime).setEndTime(LocalDateTime.now())

@@ -13,9 +13,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 @Component
 public class DefaultRuntimeDiscovery implements RuntimeDiscovery {
+
+    private static final Pattern CODEX_VERSION_LINE = Pattern.compile("(?i)^\\s*codex(?:-cli)?\\s+\\S+\\s*$");
 
     private final AgentCodexProperties codexProperties;
     private final ProcessCommandResolver commandResolver;
@@ -45,14 +48,19 @@ public class DefaultRuntimeDiscovery implements RuntimeDiscovery {
                 return new RuntimeDiscoveryResult(AgentType.CODEX, RuntimeInstallStatus.UNKNOWN, executable,
                         null, command.executablePath(), "codex --version timed out", Map.of());
             }
-            String version;
+            List<String> outputLines;
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                     process.getInputStream(), StandardCharsets.UTF_8))) {
-                version = reader.readLine();
+                outputLines = reader.lines()
+                        .map(String::trim)
+                        .filter(line -> !line.isBlank())
+                        .toList();
             }
+            String version = selectCodexVersion(outputLines);
+            String diagnostic = outputLines.isEmpty() ? null : String.join(System.lineSeparator(), outputLines);
             if (process.exitValue() != 0) {
                 return new RuntimeDiscoveryResult(AgentType.CODEX, RuntimeInstallStatus.NOT_INSTALLED, executable,
-                        null, command.executablePath(), version, Map.of("exitCode", process.exitValue()));
+                        null, command.executablePath(), diagnostic, Map.of("exitCode", process.exitValue()));
             }
             return new RuntimeDiscoveryResult(AgentType.CODEX, RuntimeInstallStatus.INSTALLED, executable,
                     version, command.executablePath(), null, Map.of("exitCode", process.exitValue()));
@@ -60,6 +68,16 @@ public class DefaultRuntimeDiscovery implements RuntimeDiscovery {
             return new RuntimeDiscoveryResult(AgentType.CODEX, RuntimeInstallStatus.NOT_INSTALLED, executable,
                     null, null, ex.getMessage(), Map.of());
         }
+    }
+
+    static String selectCodexVersion(List<String> outputLines) {
+        if (outputLines == null || outputLines.isEmpty()) {
+            return null;
+        }
+        return outputLines.stream()
+                .filter(line -> CODEX_VERSION_LINE.matcher(line).matches())
+                .findFirst()
+                .orElse(null);
     }
 
 }

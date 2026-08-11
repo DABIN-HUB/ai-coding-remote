@@ -16,13 +16,13 @@ import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
 import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
+import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
 import com.wangbin.ai.agent.daemon.exception.AgentSessionException;
 import com.wangbin.ai.agent.daemon.process.ManagedProcess;
 import com.wangbin.ai.agent.daemon.process.ProcessState;
 import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.ByteArrayInputStream;
@@ -30,6 +30,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.StringWriter;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -86,7 +87,8 @@ class CodexAppServerAdapterTest {
     }
 
     @Test
-    void startsFreshRuntimeAfterClose(@TempDir Path workspace) {
+    void startsFreshRuntimeAfterClose() throws Exception {
+        Path workspace = testWorkspace("startsFreshRuntimeAfterClose");
         TestRpcClient firstClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
         TestRpcClient secondClient = new TestRpcClient(objectMapper, processIoExecutor, "native-2");
         CodexAppServerAdapter adapter = newAdapter(workspace, List.of(firstClient, secondClient));
@@ -107,8 +109,21 @@ class CodexAppServerAdapterTest {
     }
 
     @Test
-    void emitsSessionStartedOnlyOnceWhenThreadStartedNotificationFollowsStartResponse(@TempDir Path workspace)
+    void startSessionFailureIncludesCodexErrorSummary() throws Exception {
+        Path workspace = testWorkspace("startSessionFailureIncludesCodexErrorSummary");
+        TestRpcClient rpcClient = new FailingInitializeRpcClient(objectMapper, processIoExecutor);
+        CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
+
+        assertThatThrownBy(() -> adapter.startSession(startRequest(workspace)))
+                .isInstanceOf(AgentProtocolException.class)
+                .hasMessageContaining("Codex operation failed: " + CodexProtocolConstants.METHOD_INITIALIZE)
+                .hasMessageContaining("codex init rejected");
+    }
+
+    @Test
+    void emitsSessionStartedOnlyOnceWhenThreadStartedNotificationFollowsStartResponse()
             throws Exception {
+        Path workspace = testWorkspace("emitsSessionStartedOnlyOnce");
         TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
         CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
 
@@ -129,7 +144,8 @@ class CodexAppServerAdapterTest {
     }
 
     @Test
-    void promptCommandIdCorrelatesTurnEventsAndClearsAfterSessionIdle(@TempDir Path workspace) throws Exception {
+    void promptCommandIdCorrelatesTurnEventsAndClearsAfterSessionIdle() throws Exception {
+        Path workspace = testWorkspace("promptCommandIdCorrelatesTurnEvents");
         TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
         CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
         var session = adapter.startSession(startRequest(workspace));
@@ -182,7 +198,8 @@ class CodexAppServerAdapterTest {
     }
 
     @Test
-    void retryableErrorKeepsActiveCommandAndTerminalErrorClearsIt(@TempDir Path workspace) throws Exception {
+    void retryableErrorKeepsActiveCommandAndTerminalErrorClearsIt() throws Exception {
+        Path workspace = testWorkspace("retryableErrorKeepsActiveCommand");
         TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
         CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
         var session = adapter.startSession(startRequest(workspace));
@@ -259,6 +276,12 @@ class CodexAppServerAdapterTest {
                 AgentType.CODEX, Map.of());
     }
 
+    private Path testWorkspace(String name) throws Exception {
+        Path workspace = Path.of("target", "codex-adapter-test", name).toAbsolutePath().normalize();
+        Files.createDirectories(workspace);
+        return workspace;
+    }
+
     private static final class TestAppServerProcess extends CodexAppServerProcess {
 
         private TestAppServerProcess() {
@@ -275,7 +298,7 @@ class CodexAppServerAdapterTest {
 
     }
 
-    private static final class TestRpcClient extends CodexJsonRpcClient {
+    private static class TestRpcClient extends CodexJsonRpcClient {
 
         private final ObjectMapper objectMapper;
         private final String nativeSessionId;
@@ -331,6 +354,23 @@ class CodexAppServerAdapterTest {
             return closed;
         }
 
+    }
+
+    private static final class FailingInitializeRpcClient extends TestRpcClient {
+
+        private FailingInitializeRpcClient(ObjectMapper objectMapper, ExecutorService executor) {
+            super(objectMapper, executor, "native-unused");
+        }
+
+        @Override
+        public CompletableFuture<JsonNode> request(String method, Object params) {
+            if (CodexProtocolConstants.METHOD_INITIALIZE.equals(method)) {
+                CompletableFuture<JsonNode> future = new CompletableFuture<>();
+                future.completeExceptionally(new AgentProtocolException("codex init rejected"));
+                return future;
+            }
+            return super.request(method, params);
+        }
     }
 
     private static final class TestProcess extends Process {

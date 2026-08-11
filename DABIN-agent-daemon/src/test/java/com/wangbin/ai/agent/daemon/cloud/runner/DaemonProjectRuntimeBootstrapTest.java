@@ -25,9 +25,10 @@ import com.wangbin.ai.agent.daemon.runtime.RuntimeInstallStatus;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import reactor.core.publisher.Flux;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -44,12 +45,9 @@ class DaemonProjectRuntimeBootstrapTest {
     private static final String TEST_EXECUTABLE = "codex";
     private static final String TEST_VERSION = "1.2.3";
 
-    @TempDir
-    Path tempDir;
-
     @Test
-    void bootstrapRegistersConfiguredProjectWithLocalRealPathAndReportsRuntime() {
-        Path workspace = tempDir.resolve("workspace");
+    void bootstrapRegistersConfiguredProjectWithLocalRealPathAndReportsRuntime() throws IOException {
+        Path workspace = testWorkspace();
         AgentDaemonProperties properties = new AgentDaemonProperties();
         AgentDaemonProperties.Project project = new AgentDaemonProperties.Project();
         project.setLocalProjectId(TEST_LOCAL_PROJECT_ID);
@@ -79,6 +77,12 @@ class DaemonProjectRuntimeBootstrapTest {
         assertThat(runtimeRequest.executablePath()).isEqualTo(runtimeDiscovery.resolvedPath.toString());
         assertThat(runtimeRequest.capabilities().prompt()).isTrue();
         assertThat(runtimeRequest.capabilities().permission()).isFalse();
+    }
+
+    private Path testWorkspace() throws IOException {
+        Path baseDir = Path.of("target", "daemon-bootstrap-test").toAbsolutePath().normalize();
+        Files.createDirectories(baseDir);
+        return Files.createTempDirectory(baseDir, "workspace-");
     }
 
     private DeviceCredentialState credential() {

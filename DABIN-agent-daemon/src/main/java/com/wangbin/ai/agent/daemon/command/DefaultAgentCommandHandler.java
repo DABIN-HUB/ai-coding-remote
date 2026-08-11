@@ -15,6 +15,8 @@ import com.wangbin.ai.agent.daemon.project.LocalProject;
 import com.wangbin.ai.agent.daemon.project.LocalProjectRegistry;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
@@ -26,6 +28,8 @@ import java.util.concurrent.ConcurrentMap;
 
 @Component
 public class DefaultAgentCommandHandler implements AgentCommandHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(DefaultAgentCommandHandler.class);
 
     private static final String CODE_ACCEPTED = "ACCEPTED";
     private static final String CODE_DUPLICATE = "DUPLICATE";
@@ -109,6 +113,8 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
             dedupCache.markCompleted(command.commandId());
         } catch (RuntimeException ex) {
             activeSessionCommands.remove(command.sessionId(), command.commandId());
+            log.warn("command execution failed to start: sessionId={}, commandId={}, errorType={}, error={}",
+                    command.sessionId(), command.commandId(), ex.getClass().getSimpleName(), ex.getMessage());
             outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
                     CommandAckStatus.FAILED, CODE_FAILED, "command execution failed to start", Instant.now(),
                     Map.of()));

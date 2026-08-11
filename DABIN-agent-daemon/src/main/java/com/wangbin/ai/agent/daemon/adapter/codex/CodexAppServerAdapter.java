@@ -39,13 +39,18 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 @Component
 public class CodexAppServerAdapter implements CodingAgentAdapter {
+
+    private static final int ERROR_SUMMARY_MAX_LENGTH = 256;
 
     private final ObjectMapper objectMapper;
     private final AgentCodexProperties codexProperties;
@@ -347,9 +352,41 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     private JsonNode await(java.util.concurrent.CompletableFuture<JsonNode> future, String operation) {
         try {
             return future.get(codexProperties.getRequestTimeout().toMillis(), TimeUnit.MILLISECONDS);
-        } catch (Exception ex) {
-            throw new AgentProtocolException("Codex operation failed: " + operation, ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new AgentProtocolException("Codex operation interrupted: " + operation, ex);
+        } catch (TimeoutException ex) {
+            throw new AgentProtocolException("Codex operation timed out: " + operation, ex);
+        } catch (ExecutionException ex) {
+            Throwable cause = unwrap(ex);
+            throw new AgentProtocolException("Codex operation failed: " + operation
+                    + ", cause=" + exceptionSummary(cause), ex);
         }
+    }
+
+    private Throwable unwrap(Throwable throwable) {
+        Throwable current = throwable;
+        while ((current instanceof ExecutionException || current instanceof CompletionException)
+                && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private String exceptionSummary(Throwable throwable) {
+        if (throwable == null) {
+            return "unknown";
+        }
+        String message = throwable.getMessage();
+        if (message == null || message.isBlank()) {
+            return throwable.getClass().getSimpleName();
+        }
+        return throwable.getClass().getSimpleName() + ": " + truncate(message);
+    }
+
+    private String truncate(String value) {
+        return value.length() <= ERROR_SUMMARY_MAX_LENGTH ? value
+                : value.substring(0, ERROR_SUMMARY_MAX_LENGTH) + "...";
     }
 
     synchronized CodexRuntimeState runtimeState() {
