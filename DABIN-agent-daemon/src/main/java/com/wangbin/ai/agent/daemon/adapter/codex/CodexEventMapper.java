@@ -120,8 +120,11 @@ public class CodexEventMapper {
     }
 
     private AgentEvent event(CodexSessionContext context, AgentEventType type, AgentEventPayload payload) {
-        return AgentEvent.of(null, context.tenantId(), context.userId(), context.deviceId(), context.projectId(),
-                context.platformSessionId(), 0, context.agentType(), type, payload);
+        Map<String, Object> eventExtensions = new LinkedHashMap<>();
+        putIfPresent(eventExtensions, AgentEventExtensionKeys.PLATFORM_COMMAND_ID, context.activePlatformCommandId());
+        return new AgentEvent(null, null, context.tenantId(), context.userId(), context.deviceId(), context.projectId(),
+                context.platformSessionId(), 0, context.agentType(), type, null, null, payload,
+                Map.copyOf(eventExtensions));
     }
 
     private AgentSessionStatus mapThreadStatus(JsonNode params) {
@@ -152,17 +155,17 @@ public class CodexEventMapper {
 
     private Map<String, Object> extensions(CodexRpcMessage message) {
         Map<String, Object> extensions = new LinkedHashMap<>();
-        putIfPresent(extensions, "nativeMethod", message.method());
+        putIfPresent(extensions, AgentEventExtensionKeys.NATIVE_METHOD, message.method());
         return Map.copyOf(extensions);
     }
 
     private Map<String, Object> extensions(CodexRpcMessage message, JsonNode item) {
         Map<String, Object> extensions = new LinkedHashMap<>();
-        putIfPresent(extensions, "nativeMethod", message.method());
-        putIfPresent(extensions, "nativeItemId", text(item, "id"));
-        putIfPresent(extensions, "nativeItemType", text(item, "type"));
-        putIfPresent(extensions, "nativePhase", text(item, "phase"));
-        putIfPresent(extensions, "nativeStatus", text(item, "status"));
+        putIfPresent(extensions, AgentEventExtensionKeys.NATIVE_METHOD, message.method());
+        putIfPresent(extensions, AgentEventExtensionKeys.NATIVE_ITEM_ID, text(item, "id"));
+        putIfPresent(extensions, AgentEventExtensionKeys.NATIVE_ITEM_TYPE, text(item, "type"));
+        putIfPresent(extensions, AgentEventExtensionKeys.NATIVE_PHASE, text(item, "phase"));
+        putIfPresent(extensions, AgentEventExtensionKeys.NATIVE_STATUS, text(item, "status"));
         return Map.copyOf(extensions);
     }
 

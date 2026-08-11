@@ -5,6 +5,8 @@ import com.wangbin.ai.module.agent.controller.admin.message.vo.AgentMessagePageR
 import com.wangbin.ai.module.agent.controller.admin.message.vo.AgentMessageRespVO;
 import com.wangbin.ai.module.agent.controller.admin.session.vo.*;
 
+import java.time.LocalDateTime;
+
 public interface AgentSessionService {
 
     AgentSessionRespVO createSession(AgentSessionCreateReqVO reqVO, Long userId);
@@ -16,4 +18,6 @@ public interface AgentSessionService {
     AgentCommandRespVO sendPrompt(AgentSessionSendPromptReqVO reqVO, Long userId);
 
     PageResult<AgentMessageRespVO> getMessagePage(String sessionId, AgentMessagePageReqVO reqVO, Long userId);
+
+    void markAckTimeout(String commandId, LocalDateTime now);
 }

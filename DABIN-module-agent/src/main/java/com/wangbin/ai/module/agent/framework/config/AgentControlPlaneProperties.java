@@ -47,6 +47,12 @@ public class AgentControlPlaneProperties {
     @Positive
     private long eventIngressPollIntervalMillis = 1000;
 
+    @NotNull
+    private Duration eventIngressPendingMinIdle = Duration.ofSeconds(30);
+
+    @Positive
+    private int eventIngressClaimBatchSize = 50;
+
     public Duration getPairingCodeTtl() {
         return pairingCodeTtl;
     }
@@ -141,5 +147,21 @@ public class AgentControlPlaneProperties {
 
     public void setEventIngressPollIntervalMillis(long eventIngressPollIntervalMillis) {
         this.eventIngressPollIntervalMillis = eventIngressPollIntervalMillis;
+    }
+
+    public Duration getEventIngressPendingMinIdle() {
+        return eventIngressPendingMinIdle;
+    }
+
+    public void setEventIngressPendingMinIdle(Duration eventIngressPendingMinIdle) {
+        this.eventIngressPendingMinIdle = eventIngressPendingMinIdle;
+    }
+
+    public int getEventIngressClaimBatchSize() {
+        return eventIngressClaimBatchSize;
+    }
+
+    public void setEventIngressClaimBatchSize(int eventIngressClaimBatchSize) {
+        this.eventIngressClaimBatchSize = eventIngressClaimBatchSize;
     }
 }

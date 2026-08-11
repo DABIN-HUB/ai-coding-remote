@@ -5,4 +5,6 @@ public interface CommandDedupCache {
     CommandDedupResult reserve(String commandId);
 
     void markCompleted(String commandId);
+
+    void release(String commandId);
 }

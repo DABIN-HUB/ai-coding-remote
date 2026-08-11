@@ -3,15 +3,23 @@ package com.wangbin.ai.agent.daemon.command;
 import com.wangbin.ai.agent.contract.command.*;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.enums.EventPriority;
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
+import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
+import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.session.PromptCommand;
 import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
 import com.wangbin.ai.agent.daemon.cloud.relay.DaemonOutboundSender;
+import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.project.LocalProject;
 import com.wangbin.ai.agent.daemon.project.LocalProjectRegistry;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
+import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
 import org.springframework.stereotype.Component;
 
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -24,17 +32,22 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     private static final String CODE_ACCEPTED = "ACCEPTED";
     private static final String CODE_DUPLICATE = "DUPLICATE";
     private static final String CODE_REJECTED = "REJECTED";
+    private static final String CODE_BUSY = "SESSION_BUSY";
+    private static final String CODE_FAILED = "COMMAND_START_FAILED";
 
     private final List<CodingAgentAdapter> adapters;
     private final LocalProjectRegistry localProjectRegistry;
     private final CommandDedupCache dedupCache;
+    private final WorkspaceManager workspaceManager;
     private final ConcurrentMap<String, CodingAgentAdapter> sessionAdapters = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> activeSessionCommands = new ConcurrentHashMap<>();
 
     public DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
-                                      CommandDedupCache dedupCache) {
+                                      CommandDedupCache dedupCache, WorkspaceManager workspaceManager) {
         this.adapters = adapters;
         this.localProjectRegistry = localProjectRegistry;
         this.dedupCache = dedupCache;
+        this.workspaceManager = workspaceManager;
     }
 
     @Override
@@ -47,14 +60,20 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
             outboundSender.sendCommandAck(rejected(command, "unsupported command type"));
             return;
         }
-        if (dedupCache.reserve(command.commandId()) == CommandDedupResult.DUPLICATE) {
-            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
-                    CommandAckStatus.DUPLICATE, CODE_DUPLICATE, "duplicate command", Instant.now(), Map.of()));
-            return;
-        }
         LocalProject project = localProjectRegistry.findByPlatformProjectId(command.projectId()).orElse(null);
         if (project == null || project.agentType() != command.agentType()) {
             outboundSender.sendCommandAck(rejected(command, "project is not registered locally"));
+            return;
+        }
+        Path realWorkspace;
+        try {
+            realWorkspace = workspaceManager.validateWorkspace(project.realWorkspace().toString());
+            if (!realWorkspace.equals(project.realWorkspace())) {
+                outboundSender.sendCommandAck(rejected(command, "workspace real path changed"));
+                return;
+            }
+        } catch (AgentCapabilityException ex) {
+            outboundSender.sendCommandAck(rejected(command, "workspace is not allowed locally"));
             return;
         }
         CodingAgentAdapter adapter = adapter(command.agentType());
@@ -62,20 +81,61 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
             outboundSender.sendCommandAck(rejected(command, "agent adapter does not support prompt"));
             return;
         }
+        if (dedupCache.reserve(command.commandId()) == CommandDedupResult.DUPLICATE) {
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.DUPLICATE, CODE_DUPLICATE, "duplicate command", Instant.now(), Map.of()));
+            return;
+        }
+        String activeCommand = activeSessionCommands.putIfAbsent(command.sessionId(), command.commandId());
+        if (activeCommand != null) {
+            dedupCache.release(command.commandId());
+            outboundSender.sendCommandAck(busy(command));
+            return;
+        }
         CommandAck accepted = new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
                 CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "command accepted", Instant.now(), Map.of());
         if (!outboundSender.sendCommandAck(accepted)) {
+            activeSessionCommands.remove(command.sessionId(), command.commandId());
+            dedupCache.release(command.commandId());
             return;
         }
-        CodingAgentAdapter activeAdapter = sessionAdapters.computeIfAbsent(command.sessionId(), ignored -> {
-            adapter.startSession(new SessionStartRequest(command.sessionId(), command.tenantId(), command.userId(),
-                    command.deviceId(), command.projectId(), project.realWorkspace().toString(), command.agentType(),
-                    Map.of("commandId", command.commandId())));
-            adapter.events(command.sessionId()).subscribe(outboundSender::sendAgentEvent);
-            return adapter;
-        });
-        activeAdapter.sendPrompt(command.sessionId(), new PromptCommand(command.commandId(), payload.prompt(), Map.of()));
-        dedupCache.markCompleted(command.commandId());
+        try {
+            CodingAgentAdapter activeAdapter = sessionAdapters.computeIfAbsent(command.sessionId(), ignored -> {
+                adapter.startSession(new SessionStartRequest(command.sessionId(), command.tenantId(), command.userId(),
+                        command.deviceId(), command.projectId(), realWorkspace.toString(), command.agentType(),
+                        Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, command.commandId())));
+                adapter.events(command.sessionId()).subscribe(event -> handleAgentEvent(outboundSender, event));
+                return adapter;
+            });
+            activeAdapter.sendPrompt(command.sessionId(), new PromptCommand(command.commandId(), payload.prompt(), Map.of()));
+            dedupCache.markCompleted(command.commandId());
+        } catch (RuntimeException ex) {
+            activeSessionCommands.remove(command.sessionId(), command.commandId());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.FAILED, CODE_FAILED, "command execution failed to start", Instant.now(),
+                    Map.of()));
+        }
+    }
+
+    private void handleAgentEvent(DaemonOutboundSender outboundSender, AgentEvent event) {
+        boolean accepted = outboundSender.sendAgentEvent(event);
+        if (isCommandTerminalEvent(event)) {
+            Object commandId = event.extensions().get(AgentEventExtensionKeys.PLATFORM_COMMAND_ID);
+            if (commandId instanceof String text && !text.isBlank()) {
+                activeSessionCommands.remove(event.sessionId(), text);
+            }
+        }
+        if (!accepted && (event.priority() == EventPriority.CRITICAL || event.priority() == EventPriority.IMPORTANT)) {
+            activeSessionCommands.remove(event.sessionId());
+        }
+    }
+
+    private boolean isCommandTerminalEvent(AgentEvent event) {
+        if (event.type() == AgentEventType.ERROR && event.payload() instanceof AgentErrorPayload payload) {
+            return !payload.retryable();
+        }
+        return event.type() == AgentEventType.SESSION_IDLE
+                || event.type() == AgentEventType.SESSION_COMPLETED;
     }
 
     private boolean isIdentityValid(AgentCommand command, DeviceCredentialState credential) {
@@ -99,5 +159,10 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
         String deviceId = command == null ? null : command.deviceId();
         return new CommandAck(commandId, sessionId, deviceId, CommandAckStatus.REJECTED, CODE_REJECTED, message,
                 Instant.now(), Map.of());
+    }
+
+    private CommandAck busy(AgentCommand command) {
+        return new CommandAck(command.commandId(), command.sessionId(), command.deviceId(), CommandAckStatus.REJECTED,
+                CODE_BUSY, "session already has an active prompt command", Instant.now(), Map.of());
     }
 }

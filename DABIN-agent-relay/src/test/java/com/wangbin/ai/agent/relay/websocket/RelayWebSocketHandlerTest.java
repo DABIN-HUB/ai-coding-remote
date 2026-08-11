@@ -6,7 +6,12 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.wangbin.ai.agent.contract.coordination.RelaySubjectType;
 import com.wangbin.ai.agent.contract.coordination.RelayTicketPayload;
 import com.wangbin.ai.agent.contract.command.CommandAck;
+import com.wangbin.ai.agent.contract.command.CommandAckStatus;
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
+import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
+import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.protocol.AgentProtocol;
 import com.wangbin.ai.agent.contract.websocket.HelloPayload;
 import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
@@ -48,6 +53,9 @@ class RelayWebSocketHandlerTest {
     private static final Long TEST_TENANT_ID = 1L;
     private static final Long TEST_USER_ID = 11L;
     private static final String TEST_DEVICE_ID = "dev-1";
+    private static final String TEST_PROJECT_ID = "prj-1";
+    private static final String TEST_SESSION_ID = "ses-1";
+    private static final String TEST_COMMAND_ID = "cmd-1";
     private static final String RELAY_TICKET = "ticket-1";
     private static final String CONSUMED_RELAY_TICKET = "consumed-ticket";
     private static final String TEST_WEB_SOCKET_ID = "test-ws";
@@ -106,6 +114,32 @@ class RelayWebSocketHandlerTest {
         assertThatThrownBy(() -> handler.handle(new TestWebSocketSession(invalidHello)).block(TEST_BLOCK_TIMEOUT))
                 .hasMessageContaining("protocolVersion");
         assertThat(authenticator.consumeCount.get()).isZero();
+    }
+
+    @Test
+    void agentEventAndCommandAckIngressUseAuthenticatedConnectionIdentity() throws Exception {
+        AgentRelayProperties properties = properties();
+        InMemoryConnectionManager connectionManager = new InMemoryConnectionManager(properties);
+        CapturingIngressPublisher ingressPublisher = new CapturingIngressPublisher();
+        RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
+                new StubAuthenticator(deviceTicket()), connectionManager, new StubPresenceRegistry(properties),
+                new NoopEventDispatcher(), ingressPublisher);
+        AgentEvent eventWithDifferentUser = AgentEvent.of("trace-1", TEST_TENANT_ID, 999L, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, 1L, AgentType.CODEX, AgentEventType.SESSION_IDLE,
+                new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()));
+        CommandAck ack = new CommandAck(TEST_COMMAND_ID, TEST_SESSION_ID, TEST_DEVICE_ID,
+                CommandAckStatus.ACCEPTED, "ACCEPTED", "accepted", Instant.now(), Map.of());
+        TestWebSocketSession session = new TestWebSocketSession(hello(RELAY_TICKET),
+                objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.AGENT_EVENT, eventWithDifferentUser)),
+                objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.COMMAND_ACK, ack)));
+
+        handler.handle(session).block(TEST_BLOCK_TIMEOUT);
+
+        assertThat(ingressPublisher.eventDescriptor.get()).isNotNull();
+        assertThat(ingressPublisher.eventDescriptor.get().tenantId()).isEqualTo(TEST_TENANT_ID);
+        assertThat(ingressPublisher.eventDescriptor.get().userId()).isEqualTo(TEST_USER_ID);
+        assertThat(ingressPublisher.eventDescriptor.get().deviceId()).isEqualTo(TEST_DEVICE_ID);
+        assertThat(ingressPublisher.ackDescriptor.get().userId()).isEqualTo(TEST_USER_ID);
     }
 
     private RelayTicketPayload deviceTicket() {
@@ -213,6 +247,28 @@ class RelayWebSocketHandlerTest {
         }
     }
 
+    private static final class CapturingIngressPublisher extends AgentEventIngressPublisher {
+
+        private final AtomicReference<ConnectionDescriptor> eventDescriptor = new AtomicReference<>();
+        private final AtomicReference<ConnectionDescriptor> ackDescriptor = new AtomicReference<>();
+
+        private CapturingIngressPublisher() {
+            super(null, null, null, null);
+        }
+
+        @Override
+        public Mono<Void> publish(ConnectionDescriptor descriptor, String relayNodeId, AgentEvent event) {
+            eventDescriptor.set(descriptor);
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Void> publishAck(ConnectionDescriptor descriptor, String relayNodeId, CommandAck ack) {
+            ackDescriptor.set(descriptor);
+            return Mono.empty();
+        }
+    }
+
     private static final class TestWebSocketSession implements WebSocketSession {
 
         private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
@@ -220,8 +276,13 @@ class RelayWebSocketHandlerTest {
         private final List<String> sentPayloads = new CopyOnWriteArrayList<>();
         private final AtomicInteger sendCalls = new AtomicInteger();
 
-        private TestWebSocketSession(String firstText) {
-            this.inbound = Flux.just(text(firstText));
+        private TestWebSocketSession(String firstText, String... moreTexts) {
+            WebSocketMessage[] messages = new WebSocketMessage[moreTexts.length + 1];
+            messages[0] = text(firstText);
+            for (int i = 0; i < moreTexts.length; i++) {
+                messages[i + 1] = text(moreTexts[i]);
+            }
+            this.inbound = Flux.just(messages);
         }
 
         @Override

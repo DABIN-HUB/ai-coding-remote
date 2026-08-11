@@ -3,6 +3,7 @@ package com.wangbin.ai.agent.daemon.adapter.codex;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Holds the adapter-local mapping between the platform session and the Codex
@@ -19,6 +20,7 @@ public class CodexSessionContext {
     private final String workspacePath;
     private final AgentType agentType;
     private final AtomicLong sequence = new AtomicLong();
+    private final AtomicReference<String> activePlatformCommandId = new AtomicReference<>();
 
     public CodexSessionContext(String platformSessionId, String nativeSessionId, Long tenantId, Long userId,
                                String deviceId, String projectId, String workspacePath, AgentType agentType) {
@@ -66,6 +68,18 @@ public class CodexSessionContext {
 
     public long nextSeq() {
         return sequence.incrementAndGet();
+    }
+
+    public boolean beginPlatformCommand(String commandId) {
+        return activePlatformCommandId.compareAndSet(null, commandId);
+    }
+
+    public String activePlatformCommandId() {
+        return activePlatformCommandId.get();
+    }
+
+    public void clearPlatformCommand(String commandId) {
+        activePlatformCommandId.compareAndSet(commandId, null);
     }
 
 }

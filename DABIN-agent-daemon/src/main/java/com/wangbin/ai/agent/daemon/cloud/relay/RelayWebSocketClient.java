@@ -208,6 +208,12 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
                 socket.sendClose(WebSocket.NORMAL_CLOSURE, "stale relay connection");
                 return;
             }
+            if (state.get() == RelayConnectionState.CONNECTED && webSocket == socket) {
+                connectInFlight = false;
+                cancelFuture(authTimeoutFuture);
+                authTimeoutFuture = null;
+                return;
+            }
             webSocket = socket;
             listener.attach(socket);
             scheduleAuthTimeoutLocked(credential, expectedGeneration, attemptId, socket);
@@ -269,7 +275,12 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
             if (!isCurrentAttemptLocked(expectedGeneration, attemptId)) {
                 return;
             }
-            if (webSocket != null && source != webSocket) {
+            if (source == null) {
+                return;
+            }
+            if (webSocket == null) {
+                webSocket = source;
+            } else if (source != webSocket) {
                 return;
             }
             cancelFuture(authTimeoutFuture);
@@ -306,24 +317,42 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
 
     @Override
     public boolean sendCommandAck(CommandAck ack) {
-        return sendEnvelope(webSocket, WsEnvelope.of(WsMessageType.COMMAND_ACK, ack),
-                () -> handleActiveSendFailure(new AgentConnectionException("failed to send CommandAck", null)));
+        WebSocket socket = webSocket;
+        DeviceCredentialState credential = activeCredential;
+        long expectedGeneration = generation.get();
+        long attemptId = activeAttemptId;
+        boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.COMMAND_ACK, ack),
+                () -> handleAttemptSendFailure(credential, expectedGeneration, attemptId, socket,
+                        new AgentConnectionException("failed to send CommandAck", null)));
+        if (!accepted) {
+            handleAttemptSendFailure(credential, expectedGeneration, attemptId, socket,
+                    new AgentConnectionException("daemon outbound queue rejected CommandAck", null));
+        }
+        return accepted;
     }
 
     @Override
     public boolean sendAgentEvent(AgentEvent event) {
-        return sendEnvelope(webSocket, WsEnvelope.of(WsMessageType.AGENT_EVENT, event),
-                () -> handleActiveSendFailure(new AgentConnectionException("failed to send AgentEvent", null)));
-    }
-
-    private void handleActiveSendFailure(Throwable throwable) {
         WebSocket socket = webSocket;
         DeviceCredentialState credential = activeCredential;
+        long expectedGeneration = generation.get();
+        long attemptId = activeAttemptId;
+        boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.AGENT_EVENT, event),
+                () -> handleAttemptSendFailure(credential, expectedGeneration, attemptId, socket,
+                        new AgentConnectionException("failed to send AgentEvent", null)));
+        if (!accepted && event != null && (event.priority() == com.wangbin.ai.agent.contract.enums.EventPriority.CRITICAL
+                || event.priority() == com.wangbin.ai.agent.contract.enums.EventPriority.IMPORTANT)) {
+            handleAttemptSendFailure(credential, expectedGeneration, attemptId, socket,
+                    new AgentConnectionException("daemon outbound queue rejected reliable AgentEvent", null));
+        }
+        return accepted;
+    }
+
+    private void handleAttemptSendFailure(DeviceCredentialState credential, long expectedGeneration, long attemptId,
+                                          WebSocket socket, Throwable throwable) {
         if (credential == null) {
             return;
         }
-        long expectedGeneration = generation.get();
-        long attemptId = activeAttemptId;
         handleDisconnect(credential, expectedGeneration, attemptId, socket, throwable);
     }
 
@@ -372,6 +401,7 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
 
         @Override
         public void onOpen(WebSocket webSocket) {
+            attach(webSocket);
             webSocket.request(1);
         }
 
@@ -412,7 +442,12 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
                 }
                 if (envelope.type() == WsMessageType.AGENT_COMMAND) {
                     WsEnvelope<AgentCommand> command = objectMapper.readValue(json, envelopeType(AgentCommand.class));
-                    commandHandler.handle(command.payload(), credential, RelayWebSocketClient.this);
+                    try {
+                        commandHandler.handle(command.payload(), credential, RelayWebSocketClient.this);
+                    } catch (RuntimeException ex) {
+                        log.warn("failed to handle AgentCommand business message: commandId={}",
+                                command.payload() == null ? null : command.payload().commandId(), ex);
+                    }
                     return;
                 }
                 log.debug("ignored relay message before AgentEvent uplink is enabled: type={}", envelope.type());

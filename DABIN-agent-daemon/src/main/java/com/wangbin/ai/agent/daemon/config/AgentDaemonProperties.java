@@ -1,10 +1,14 @@
 package com.wangbin.ai.agent.daemon.config;
 
+import com.wangbin.ai.agent.contract.enums.AgentType;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 @Validated
 @ConfigurationProperties(prefix = "agent.daemon")
@@ -28,6 +32,8 @@ public class AgentDaemonProperties {
 
     private final Smoke smoke = new Smoke();
     private final Cloud cloud = new Cloud();
+    @Valid
+    private final List<Project> projects = new ArrayList<>();
 
     public int getProcessIoThreads() {
         return processIoThreads;
@@ -83,6 +89,10 @@ public class AgentDaemonProperties {
 
     public Cloud getCloud() {
         return cloud;
+    }
+
+    public List<Project> getProjects() {
+        return projects;
     }
 
     public static class Smoke {
@@ -149,6 +159,49 @@ public class AgentDaemonProperties {
 
         public void setWelcomeTimeout(Duration welcomeTimeout) {
             this.welcomeTimeout = welcomeTimeout;
+        }
+    }
+
+    public static class Project {
+
+        private String localProjectId;
+
+        private String projectName;
+
+        private String workspacePath;
+
+        private AgentType agentType = AgentType.CODEX;
+
+        public String getLocalProjectId() {
+            return localProjectId;
+        }
+
+        public void setLocalProjectId(String localProjectId) {
+            this.localProjectId = localProjectId;
+        }
+
+        public String getProjectName() {
+            return projectName;
+        }
+
+        public void setProjectName(String projectName) {
+            this.projectName = projectName;
+        }
+
+        public String getWorkspacePath() {
+            return workspacePath;
+        }
+
+        public void setWorkspacePath(String workspacePath) {
+            this.workspacePath = workspacePath;
+        }
+
+        public AgentType getAgentType() {
+            return agentType;
+        }
+
+        public void setAgentType(AgentType agentType) {
+            this.agentType = agentType;
         }
     }
 

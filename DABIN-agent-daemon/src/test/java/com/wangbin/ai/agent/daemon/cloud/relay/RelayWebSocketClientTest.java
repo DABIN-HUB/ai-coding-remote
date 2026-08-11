@@ -95,7 +95,7 @@ class RelayWebSocketClientTest {
 
         client.start(credential());
 
-        waitUntil(() -> controlPlaneClient.ticketCount.get() >= 2);
+        waitUntil(() -> controlPlaneClient.ticketCount.get() >= 2 && connector.connectCount.get() >= 2);
         assertThat(connector.connectCount.get()).isGreaterThanOrEqualTo(2);
         client.stop();
     }

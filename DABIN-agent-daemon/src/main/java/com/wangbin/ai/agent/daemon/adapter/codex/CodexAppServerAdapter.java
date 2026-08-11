@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
+import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.session.AgentCapabilities;
 import com.wangbin.ai.agent.contract.session.AgentSession;
@@ -110,12 +113,16 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
                 request.userId(), request.deviceId(), request.projectId(), workspace.toString(), AgentType.CODEX);
         platformSessions.put(platformSessionId, context);
         nativeSessions.put(nativeSessionId, context);
+        String platformCommandId = stringMetadata(request, AgentEventExtensionKeys.PLATFORM_COMMAND_ID);
         emit(new AgentEvent(null, UUID.randomUUID().toString(), request.tenantId(), request.userId(),
                 request.deviceId(), request.projectId(), platformSessionId, 0, AgentType.CODEX,
                 com.wangbin.ai.agent.contract.enums.AgentEventType.SESSION_STARTED, null, null,
                 new SessionPayload(nativeSessionId, AgentSessionStatus.RUNNING, null,
                         Map.of("source", CodexProtocolConstants.METHOD_THREAD_START)),
-                Map.of("nativeMethod", CodexProtocolConstants.METHOD_THREAD_START)), context);
+                platformCommandId == null
+                        ? Map.of(AgentEventExtensionKeys.NATIVE_METHOD, CodexProtocolConstants.METHOD_THREAD_START)
+                        : Map.of(AgentEventExtensionKeys.NATIVE_METHOD, CodexProtocolConstants.METHOD_THREAD_START,
+                        AgentEventExtensionKeys.PLATFORM_COMMAND_ID, platformCommandId)), context);
         return new AgentSession(platformSessionId, nativeSessionId, request.tenantId(), request.userId(),
                 request.deviceId(), request.projectId(), AgentType.CODEX, AgentSessionStatus.RUNNING,
                 capabilities(), Instant.now(), Map.of("workspacePath", workspace.toString()));
@@ -124,6 +131,9 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     @Override
     public void sendPrompt(String sessionId, PromptCommand command) {
         CodexSessionContext context = requireSession(sessionId);
+        if (!context.beginPlatformCommand(command.commandId())) {
+            throw new AgentSessionException("session already has an active Codex turn: " + sessionId);
+        }
         ObjectNode params = objectMapper.createObjectNode();
         params.put("threadId", context.nativeSessionId());
         params.put("cwd", context.workspacePath());
@@ -132,11 +142,16 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         ObjectNode text = input.addObject();
         text.put("type", "text");
         text.put("text", command.prompt());
-        JsonNode response = await(rpcClient.request(CodexProtocolConstants.METHOD_TURN_START, params),
-                CodexProtocolConstants.METHOD_TURN_START);
-        String turnId = response.path("turn").path("id").asText(null);
-        if (turnId != null) {
-            activeTurnIds.put(context.platformSessionId(), turnId);
+        try {
+            JsonNode response = await(rpcClient.request(CodexProtocolConstants.METHOD_TURN_START, params),
+                    CodexProtocolConstants.METHOD_TURN_START);
+            String turnId = response.path("turn").path("id").asText(null);
+            if (turnId != null) {
+                activeTurnIds.put(context.platformSessionId(), turnId);
+            }
+        } catch (RuntimeException ex) {
+            context.clearPlatformCommand(command.commandId());
+            throw ex;
         }
     }
 
@@ -270,6 +285,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
 
     private void emitSequenced(AgentEvent event, CodexSessionContext context) {
         sessionEventEmitter.emit(event, context::nextSeq, this::emitDirect);
+        clearCompletedPlatformCommand(event, context);
     }
 
     private void emitDirect(AgentEvent event) {
@@ -311,6 +327,28 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
             throw new AgentSessionException("unknown Codex session: " + sessionId);
         }
         return context;
+    }
+
+    private void clearCompletedPlatformCommand(AgentEvent event, CodexSessionContext context) {
+        Object commandId = event.extensions().get(AgentEventExtensionKeys.PLATFORM_COMMAND_ID);
+        if (!(commandId instanceof String text) || text.isBlank()) {
+            return;
+        }
+        if (event.type() == AgentEventType.SESSION_IDLE || event.type() == AgentEventType.SESSION_COMPLETED) {
+            context.clearPlatformCommand(text);
+            activeTurnIds.remove(context.platformSessionId());
+            return;
+        }
+        if (event.type() == AgentEventType.ERROR && event.payload() instanceof AgentErrorPayload payload
+                && !payload.retryable()) {
+            context.clearPlatformCommand(text);
+            activeTurnIds.remove(context.platformSessionId());
+        }
+    }
+
+    private String stringMetadata(SessionStartRequest request, String key) {
+        Object value = request.metadata().get(key);
+        return value instanceof String text && !text.isBlank() ? text : null;
     }
 
     private JsonNode await(java.util.concurrent.CompletableFuture<JsonNode> future, String operation) {

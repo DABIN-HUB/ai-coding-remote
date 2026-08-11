@@ -9,6 +9,7 @@ import com.wangbin.ai.agent.contract.coordination.DeviceRoutePayload;
 import com.wangbin.ai.agent.contract.coordination.RelayCommandDispatchPayload;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.runtime.AgentRuntimeTypes;
 import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.framework.tenant.core.context.TenantContextHolder;
 import com.wangbin.ai.module.agent.controller.admin.message.vo.AgentMessagePageReqVO;
@@ -18,11 +19,13 @@ import com.wangbin.ai.module.agent.dal.dataobject.command.AgentCommandDO;
 import com.wangbin.ai.module.agent.dal.dataobject.device.AgentDeviceDO;
 import com.wangbin.ai.module.agent.dal.dataobject.message.AgentMessageDO;
 import com.wangbin.ai.module.agent.dal.dataobject.project.AgentProjectDO;
+import com.wangbin.ai.module.agent.dal.dataobject.runtime.AgentRuntimeDO;
 import com.wangbin.ai.module.agent.dal.dataobject.session.AgentSessionDO;
 import com.wangbin.ai.module.agent.dal.mysql.command.AgentCommandMapper;
 import com.wangbin.ai.module.agent.dal.mysql.device.AgentDeviceMapper;
 import com.wangbin.ai.module.agent.dal.mysql.message.AgentMessageMapper;
 import com.wangbin.ai.module.agent.dal.mysql.project.AgentProjectMapper;
+import com.wangbin.ai.module.agent.dal.mysql.runtime.AgentRuntimeMapper;
 import com.wangbin.ai.module.agent.dal.mysql.session.AgentSessionMapper;
 import com.wangbin.ai.module.agent.enums.*;
 import com.wangbin.ai.module.agent.framework.config.AgentControlPlaneProperties;
@@ -53,6 +56,7 @@ public class AgentSessionServiceImpl implements AgentSessionService {
     private final AgentSessionMapper sessionMapper;
     private final AgentProjectMapper projectMapper;
     private final AgentDeviceMapper deviceMapper;
+    private final AgentRuntimeMapper runtimeMapper;
     private final AgentCommandMapper commandMapper;
     private final AgentMessageMapper messageMapper;
     private final DeviceRouteLookupService routeLookupService;
@@ -70,7 +74,11 @@ public class AgentSessionServiceImpl implements AgentSessionService {
         if (!project.isActive()) {
             throw exception(PROJECT_DISABLED);
         }
+        if (reqVO.getAgentType() == AgentType.UNKNOWN || !reqVO.getAgentType().name().equals(project.getAgentType())) {
+            throw exception(RUNTIME_UNAVAILABLE);
+        }
         AgentDeviceDO device = requireActiveDevice(project.getDeviceId(), userId);
+        AgentRuntimeDO runtime = requireAvailableRuntime(device.getId(), reqVO.getAgentType());
         DeviceRoutePayload route = routeLookupService.getRoute(device.getDeviceId());
         if (!isRouteValid(route, TenantContextHolder.getRequiredTenantId(), device.getDeviceId())) {
             throw exception(DEVICE_OFFLINE);
@@ -80,6 +88,7 @@ public class AgentSessionServiceImpl implements AgentSessionService {
         session.setSessionId(idFactory.sessionId());
         session.setDeviceId(device.getId());
         session.setProjectId(project.getId());
+        session.setRuntimeId(runtime.getId());
         session.setOwnerUserId(userId);
         session.setAgentType(reqVO.getAgentType().name());
         session.setSessionStatus(AgentSessionDbStatus.CREATED.name());
@@ -136,6 +145,23 @@ public class AgentSessionServiceImpl implements AgentSessionService {
         AgentSessionDO session = requireSession(sessionId, userId);
         PageResult<AgentMessageDO> page = messageMapper.selectPage(reqVO, session.getId());
         return new PageResult<>(page.getList().stream().map(this::toMessageRespVO).toList(), page.getTotal());
+    }
+
+    @Override
+    public void markAckTimeout(String commandId, LocalDateTime now) {
+        transactionTemplate.executeWithoutResult(status -> {
+            AgentCommandDO command = commandMapper.selectByCommandId(commandId);
+            if (command == null) {
+                throw exception(COMMAND_NOT_EXISTS);
+            }
+            AgentCommandDbStatus current = AgentCommandDbStatus.valueOf(command.getCommandStatus());
+            if (current == AgentCommandDbStatus.ROUTING || current == AgentCommandDbStatus.CREATED) {
+                command.setCommandStatus(AgentCommandDbStatus.TIMEOUT.name());
+                command.setCompletedTime(now);
+                command.setErrorMessage("Command ACK timeout");
+                commandMapper.updateById(command);
+            }
+        });
     }
 
     private AgentCommandRespVO createAndDispatchPrompt(AgentSessionSendPromptReqVO reqVO, Long userId) {
@@ -228,7 +254,7 @@ public class AgentSessionServiceImpl implements AgentSessionService {
                 session.getOwnerUserId(), device.getDeviceId(), project.getProjectId(), session.getSessionId(),
                 AgentType.valueOf(session.getAgentType()), CommandType.PROMPT,
                 new PromptCommandPayload(prompt, Map.of()), Instant.now(),
-                Instant.now().plus(properties.getCommandAckTimeout()), Map.of("workspacePath", project.getWorkspacePath()));
+                Instant.now().plus(properties.getCommandAckTimeout()), Map.of());
     }
 
     private String writePayload(Object payload) {
@@ -303,6 +329,21 @@ public class AgentSessionServiceImpl implements AgentSessionService {
             throw exception(DEVICE_DISABLED);
         }
         return device;
+    }
+
+    private AgentRuntimeDO requireAvailableRuntime(Long deviceId, AgentType agentType) {
+        AgentRuntimeDO runtime = runtimeMapper.selectByDeviceAndType(deviceId, runtimeType(agentType));
+        if (runtime == null || !runtime.isAvailable()) {
+            throw exception(RUNTIME_UNAVAILABLE);
+        }
+        return runtime;
+    }
+
+    private String runtimeType(AgentType agentType) {
+        if (agentType == AgentType.CODEX) {
+            return AgentRuntimeTypes.CODEX_APP_SERVER;
+        }
+        throw exception(RUNTIME_UNAVAILABLE);
     }
 
     private AgentSessionRespVO toRespVO(AgentSessionDO session) {

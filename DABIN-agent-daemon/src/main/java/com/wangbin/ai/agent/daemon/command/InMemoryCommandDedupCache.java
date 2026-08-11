@@ -35,6 +35,11 @@ public class InMemoryCommandDedupCache implements CommandDedupCache {
         evictOverflow();
     }
 
+    @Override
+    public synchronized void release(String commandId) {
+        commands.remove(commandId);
+    }
+
     private void evictExpired() {
         Instant deadline = Instant.now().minus(properties.getCommandDedupTtl());
         Iterator<Map.Entry<String, Instant>> iterator = commands.entrySet().iterator();

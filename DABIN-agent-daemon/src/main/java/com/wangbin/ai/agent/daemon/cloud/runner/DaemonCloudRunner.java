@@ -35,15 +35,18 @@ public class DaemonCloudRunner implements ApplicationRunner {
     private final DaemonStateStore stateStore;
     private final ControlPlaneClient controlPlaneClient;
     private final RelayWebSocketClient relayWebSocketClient;
+    private final DaemonProjectRuntimeBootstrap projectRuntimeBootstrap;
 
     public DaemonCloudRunner(AgentDaemonProperties properties,
                              DaemonStateStore stateStore,
                              ControlPlaneClient controlPlaneClient,
-                             RelayWebSocketClient relayWebSocketClient) {
+                             RelayWebSocketClient relayWebSocketClient,
+                             DaemonProjectRuntimeBootstrap projectRuntimeBootstrap) {
         this.properties = properties;
         this.stateStore = stateStore;
         this.controlPlaneClient = controlPlaneClient;
         this.relayWebSocketClient = relayWebSocketClient;
+        this.projectRuntimeBootstrap = projectRuntimeBootstrap;
     }
 
     @Override
@@ -77,7 +80,10 @@ public class DaemonCloudRunner implements ApplicationRunner {
     }
 
     private void runCloudTransport() {
-        stateStore.loadCredential().ifPresentOrElse(relayWebSocketClient::start,
+        stateStore.loadCredential().ifPresentOrElse(credential -> {
+                    projectRuntimeBootstrap.bootstrap(credential);
+                    relayWebSocketClient.start(credential);
+                },
                 () -> log.warn("daemon has no device credential; run --mode=pair --pairingCode=<code> first"));
     }
 

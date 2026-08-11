@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
+import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
+import com.wangbin.ai.agent.contract.session.PromptCommand;
 import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
 import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
@@ -123,6 +126,59 @@ class CodexAppServerAdapterTest {
                 .containsExactly(1L);
     }
 
+    @Test
+    void promptCommandIdCorrelatesTurnEventsAndClearsAfterSessionIdle(@TempDir Path workspace) throws Exception {
+        TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
+        CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
+        var session = adapter.startSession(startRequest(workspace));
+        List<AgentEvent> events = new ArrayList<>();
+        adapter.events(session.platformSessionId()).subscribe(events::add);
+
+        adapter.sendPrompt(session.platformSessionId(), new PromptCommand("cmd-123", "hello", Map.of()));
+        adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ITEM_COMPLETED,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "item": {
+                            "id": "native-msg-1",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "answer"
+                          }
+                        }
+                        """)));
+        adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_TURN_COMPLETED,
+                objectMapper.readTree("{\"threadId\":\"native-1\",\"turn\":{\"id\":\"turn-1\"}}")));
+
+        AgentEvent messageEvent = events.stream()
+                .filter(event -> event.type() == AgentEventType.AGENT_MESSAGE)
+                .findFirst()
+                .orElseThrow();
+        assertThat(messageEvent.extensions())
+                .containsEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, "cmd-123");
+        AgentMessagePayload payload = (AgentMessagePayload) messageEvent.payload();
+        assertThat(payload.messageId()).isEqualTo("native-msg-1");
+        assertThat(payload.extensions())
+                .containsEntry(AgentEventExtensionKeys.NATIVE_ITEM_ID, "native-msg-1");
+        assertThat(events.stream()
+                .filter(event -> event.type() == AgentEventType.SESSION_IDLE)
+                .findFirst()
+                .orElseThrow()
+                .extensions()).containsEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, "cmd-123");
+
+        adapter.sendPrompt(session.platformSessionId(), new PromptCommand("cmd-456", "next", Map.of()));
+
+        assertThat(rpcClient.requests)
+                .contains(CodexProtocolConstants.METHOD_TURN_START, CodexProtocolConstants.METHOD_TURN_START);
+        assertThat(rpcClient.requestParams.stream()
+                .filter(params -> "cmd-123".equals(params.path("clientUserMessageId").asText(null))))
+                .hasSize(1);
+        assertThat(rpcClient.requestParams.stream()
+                .filter(params -> "cmd-456".equals(params.path("clientUserMessageId").asText(null))))
+                .hasSize(1);
+    }
+
     private CodexAppServerAdapter newAdapter(Path workspace, List<TestRpcClient> clients) {
         AgentCodexProperties codexProperties = new AgentCodexProperties();
         codexProperties.setRequestTimeout(Duration.ofSeconds(1));
@@ -182,6 +238,7 @@ class CodexAppServerAdapterTest {
         private final ObjectMapper objectMapper;
         private final String nativeSessionId;
         private final List<String> requests = new ArrayList<>();
+        private final List<JsonNode> requestParams = new ArrayList<>();
         private final List<Integer> errorCodes = new ArrayList<>();
         private final List<String> protocolWarningCodes = new ArrayList<>();
         private boolean closed;
@@ -195,9 +252,14 @@ class CodexAppServerAdapterTest {
         @Override
         public CompletableFuture<JsonNode> request(String method, Object params) {
             requests.add(method);
+            requestParams.add(objectMapper.valueToTree(params));
             if (CodexProtocolConstants.METHOD_THREAD_START.equals(method)) {
                 return CompletableFuture.completedFuture(objectMapper.createObjectNode()
                         .set("thread", objectMapper.createObjectNode().put("id", nativeSessionId)));
+            }
+            if (CodexProtocolConstants.METHOD_TURN_START.equals(method)) {
+                return CompletableFuture.completedFuture(objectMapper.createObjectNode()
+                        .set("turn", objectMapper.createObjectNode().put("id", "turn-" + requests.size())));
             }
             return CompletableFuture.completedFuture(objectMapper.createObjectNode());
         }

@@ -39,7 +39,8 @@ public class AgentEventIngressPublisher {
         return Mono.fromRunnable(() -> {
             try {
                 AgentEventIngressPayload payload = new AgentEventIngressPayload(relayNodeId,
-                        descriptor.connectionId(), event, null);
+                        descriptor.connectionId(), descriptor.tenantId(), descriptor.userId(), descriptor.deviceId(),
+                        event, null);
                 String json = objectMapper.writeValueAsString(payload);
                 String key = AgentCoordinationKeys.eventIngressStream();
                 stringRedisTemplate.opsForStream().add(key, Map.of(AgentCoordinationKeys.EVENT_INGRESS_FIELD_TYPE,
@@ -56,7 +57,8 @@ public class AgentEventIngressPublisher {
         return Mono.fromRunnable(() -> {
             try {
                 CommandAckIngressPayload payload = new CommandAckIngressPayload(relayNodeId,
-                        descriptor.connectionId(), ack, null);
+                        descriptor.connectionId(), descriptor.tenantId(), descriptor.userId(), descriptor.deviceId(),
+                        ack, null);
                 String json = objectMapper.writeValueAsString(payload);
                 String key = AgentCoordinationKeys.eventIngressStream();
                 stringRedisTemplate.opsForStream().add(key, Map.of(AgentCoordinationKeys.EVENT_INGRESS_FIELD_TYPE,

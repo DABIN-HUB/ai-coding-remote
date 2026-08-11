@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.CommandOutputPayload;
 import com.wangbin.ai.agent.contract.event.FileChangedPayload;
@@ -21,6 +22,7 @@ class CodexEventMapperTest {
     private final CodexEventMapper mapper = new CodexEventMapper();
     private final CodexSessionContext context = new CodexSessionContext("platform-1", "native-1",
             1L, 11L, "device-1", "project-1", "F:/workspace", AgentType.CODEX);
+    private static final String TEST_PLATFORM_COMMAND_ID = "cmd-platform-123";
 
     @Test
     void mapsAgentMessageDelta() throws Exception {
@@ -63,9 +65,38 @@ class CodexEventMapperTest {
         assertThat(payload.content()).isEqualTo("hello world");
         assertThat(payload.delta()).isFalse();
         assertThat(payload.extensions())
-                .containsEntry("nativeItemId", "msg-1")
-                .containsEntry("nativeItemType", "agentMessage")
+                .containsEntry(AgentEventExtensionKeys.NATIVE_ITEM_ID, "msg-1")
+                .containsEntry(AgentEventExtensionKeys.NATIVE_ITEM_TYPE, "agentMessage")
                 .doesNotContainKey("nativeItem");
+    }
+
+    @Test
+    void mapsActivePlatformCommandIdWithoutReplacingNativeItemId() throws Exception {
+        context.beginPlatformCommand(TEST_PLATFORM_COMMAND_ID);
+        var message = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ITEM_COMPLETED,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "item": {
+                            "id": "native-msg-1",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "hello world"
+                          }
+                        }
+                        """));
+
+        var events = mapper.map(message, context);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().extensions())
+                .containsEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, TEST_PLATFORM_COMMAND_ID);
+        AgentMessagePayload payload = (AgentMessagePayload) events.getFirst().payload();
+        assertThat(payload.messageId()).isEqualTo("native-msg-1");
+        assertThat(payload.extensions())
+                .containsEntry(AgentEventExtensionKeys.NATIVE_ITEM_ID, "native-msg-1")
+                .doesNotContainEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, TEST_PLATFORM_COMMAND_ID);
     }
 
     @Test
