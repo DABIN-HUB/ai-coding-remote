@@ -157,7 +157,7 @@ class CodexAppServerAdapterTest {
     }
 
     private SessionStartRequest startRequest(Path workspace) {
-        return new SessionStartRequest(1L, 11L, "device-1", "project-1", workspace.toString(),
+        return new SessionStartRequest(null, 1L, 11L, "device-1", "project-1", workspace.toString(),
                 AgentType.CODEX, Map.of());
     }
 

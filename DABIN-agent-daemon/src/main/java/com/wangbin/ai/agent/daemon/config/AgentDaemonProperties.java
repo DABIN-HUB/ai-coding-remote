@@ -18,6 +18,14 @@ public class AgentDaemonProperties {
     @Min(1)
     private int eventAggregationMaxChars = 160;
 
+    @Min(1)
+    private int commandDedupCapacity = 2048;
+
+    private Duration commandDedupTtl = Duration.ofMinutes(45);
+
+    @Min(1)
+    private int outboundQueueCapacity = 1024;
+
     private final Smoke smoke = new Smoke();
     private final Cloud cloud = new Cloud();
 
@@ -43,6 +51,30 @@ public class AgentDaemonProperties {
 
     public void setEventAggregationMaxChars(int eventAggregationMaxChars) {
         this.eventAggregationMaxChars = eventAggregationMaxChars;
+    }
+
+    public int getCommandDedupCapacity() {
+        return commandDedupCapacity;
+    }
+
+    public void setCommandDedupCapacity(int commandDedupCapacity) {
+        this.commandDedupCapacity = commandDedupCapacity;
+    }
+
+    public Duration getCommandDedupTtl() {
+        return commandDedupTtl;
+    }
+
+    public void setCommandDedupTtl(Duration commandDedupTtl) {
+        this.commandDedupTtl = commandDedupTtl;
+    }
+
+    public int getOutboundQueueCapacity() {
+        return outboundQueueCapacity;
+    }
+
+    public void setOutboundQueueCapacity(int outboundQueueCapacity) {
+        this.outboundQueueCapacity = outboundQueueCapacity;
     }
 
     public Smoke getSmoke() {

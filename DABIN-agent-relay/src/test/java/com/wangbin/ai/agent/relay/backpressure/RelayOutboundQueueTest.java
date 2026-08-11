@@ -71,7 +71,8 @@ class RelayOutboundQueueTest {
         connection.enqueue(new OutboundMessage(CONNECTION_A, EventPriority.CRITICAL, "already-full", null));
         WebSocketEventDispatcher dispatcher = new WebSocketEventDispatcher(manager, objectMapper);
 
-        assertThatThrownBy(() -> dispatcher.dispatchToUser(TEST_USER_ID, criticalEvent()).block(Duration.ofSeconds(1)))
+        assertThatThrownBy(() -> dispatcher.dispatchToUser(TEST_TENANT_ID, TEST_USER_ID, criticalEvent())
+                .block(Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("critical outbound message rejected");
     }

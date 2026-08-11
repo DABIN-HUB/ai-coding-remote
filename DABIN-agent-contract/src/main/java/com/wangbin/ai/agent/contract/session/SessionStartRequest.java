@@ -5,6 +5,7 @@ import com.wangbin.ai.agent.contract.enums.AgentType;
 import java.util.Map;
 
 public record SessionStartRequest(
+        String platformSessionId,
         Long tenantId,
         Long userId,
         String deviceId,

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.enums.EventPriority;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
+import com.wangbin.ai.agent.contract.websocket.WsMessageType;
 import com.wangbin.ai.agent.relay.backpressure.OutboundMessage;
 import com.wangbin.ai.agent.relay.connection.ConnectionContext;
 import com.wangbin.ai.agent.relay.connection.ConnectionManager;
@@ -31,14 +33,14 @@ public class WebSocketEventDispatcher implements EventDispatcher {
     }
 
     @Override
-    public Mono<Void> dispatchToUser(Long userId, AgentEvent event) {
-        return Flux.fromIterable(connectionManager.findUserConnections(userId))
+    public Mono<Void> dispatchToUser(Long tenantId, Long userId, AgentEvent event) {
+        return Flux.fromIterable(connectionManager.findUserConnections(tenantId, userId))
                 .flatMap(context -> enqueueAndDrain(context, event))
                 .then();
     }
 
     private Mono<Void> enqueueAndDrain(ConnectionContext context, AgentEvent event) {
-        return Mono.fromCallable(() -> objectMapper.writeValueAsString(event))
+        return Mono.fromCallable(() -> objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.AGENT_EVENT, event)))
                 .flatMap(payload -> {
                     boolean accepted = context.enqueue(new OutboundMessage(
                             context.descriptor().connectionId(), event.priority(), payload, null));

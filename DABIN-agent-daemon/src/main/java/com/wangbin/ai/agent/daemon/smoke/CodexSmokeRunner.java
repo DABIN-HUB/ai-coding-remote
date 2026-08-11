@@ -68,6 +68,7 @@ public class CodexSmokeRunner implements ApplicationRunner {
         }
 
         AgentSession session = codexAdapter.startSession(new SessionStartRequest(
+                null,
                 1L,
                 1L,
                 "local-dev-device",

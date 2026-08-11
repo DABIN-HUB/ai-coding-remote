@@ -1,21 +1,21 @@
 package com.wangbin.ai.agent.contract.command;
 
-import com.wangbin.ai.agent.contract.enums.CommandStatus;
-
 import java.time.Instant;
 import java.util.Map;
 
 public record CommandAck(
         String commandId,
-        CommandStatus status,
-        String daemonId,
+        String sessionId,
+        String deviceId,
+        CommandAckStatus status,
+        String code,
         String message,
-        Instant ackAt,
+        Instant timestamp,
         Map<String, Object> extensions
 ) {
 
     public CommandAck {
-        ackAt = ackAt == null ? Instant.now() : ackAt;
+        timestamp = timestamp == null ? Instant.now() : timestamp;
         extensions = extensions == null ? Map.of() : Map.copyOf(extensions);
     }
 

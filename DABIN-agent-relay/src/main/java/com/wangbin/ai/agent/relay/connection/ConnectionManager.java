@@ -16,6 +16,6 @@ public interface ConnectionManager {
 
     Optional<ConnectionContext> findDeviceConnection(String deviceId);
 
-    Set<ConnectionContext> findUserConnections(Long userId);
+    Set<ConnectionContext> findUserConnections(Long tenantId, Long userId);
 
 }

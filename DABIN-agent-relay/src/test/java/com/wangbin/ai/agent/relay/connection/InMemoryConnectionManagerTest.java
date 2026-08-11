@@ -73,8 +73,9 @@ class InMemoryConnectionManagerTest {
 
         Field field = InMemoryConnectionManager.class.getDeclaredField("userToConnectionIds");
         field.setAccessible(true);
-        Map<Long, Set<String>> userRoutes = (Map<Long, Set<String>>) field.get(manager);
-        assertThat(userRoutes.get(TEST_USER_ID)).containsExactly(CONNECTION_PREFIX + REPLACEMENT_END_INDEX);
+        Map<TenantUserKey, Set<String>> userRoutes = (Map<TenantUserKey, Set<String>>) field.get(manager);
+        assertThat(userRoutes.get(new TenantUserKey(TEST_TENANT_ID, TEST_USER_ID)))
+                .containsExactly(CONNECTION_PREFIX + REPLACEMENT_END_INDEX);
     }
 
     private ConnectionDescriptor descriptor(String connectionId) {

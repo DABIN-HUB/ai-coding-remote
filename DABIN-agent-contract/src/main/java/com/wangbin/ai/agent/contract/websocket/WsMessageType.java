@@ -5,6 +5,9 @@ public enum WsMessageType {
     WELCOME,
     PING,
     PONG,
+    AGENT_COMMAND,
+    COMMAND_ACK,
     AGENT_EVENT,
+    RUNTIME_REPORT,
     ERROR
 }

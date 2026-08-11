@@ -17,7 +17,7 @@ public class InMemoryConnectionManager implements ConnectionManager {
     private final AgentRelayProperties properties;
     private final Map<String, ConnectionContext> byConnectionId = new ConcurrentHashMap<>();
     private final Map<String, String> deviceToConnectionId = new ConcurrentHashMap<>();
-    private final Map<Long, Set<String>> userToConnectionIds = new ConcurrentHashMap<>();
+    private final Map<TenantUserKey, Set<String>> userToConnectionIds = new ConcurrentHashMap<>();
 
     public InMemoryConnectionManager(AgentRelayProperties properties) {
         this.properties = properties;
@@ -44,7 +44,7 @@ public class InMemoryConnectionManager implements ConnectionManager {
                 }
             }
             if (descriptor.userId() != null) {
-                userToConnectionIds.computeIfAbsent(descriptor.userId(), ignored -> ConcurrentHashMap.newKeySet())
+                userToConnectionIds.computeIfAbsent(userKey(descriptor), ignored -> ConcurrentHashMap.newKeySet())
                         .add(descriptor.connectionId());
             }
         });
@@ -76,11 +76,12 @@ public class InMemoryConnectionManager implements ConnectionManager {
             deviceToConnectionId.remove(descriptor.deviceId(), connectionId);
         }
         if (descriptor.userId() != null) {
-            Set<String> ids = userToConnectionIds.get(descriptor.userId());
+            TenantUserKey key = userKey(descriptor);
+            Set<String> ids = userToConnectionIds.get(key);
             if (ids != null) {
                 ids.remove(connectionId);
                 if (ids.isEmpty()) {
-                    userToConnectionIds.remove(descriptor.userId());
+                    userToConnectionIds.remove(key);
                 }
             }
         }
@@ -98,11 +99,15 @@ public class InMemoryConnectionManager implements ConnectionManager {
     }
 
     @Override
-    public Set<ConnectionContext> findUserConnections(Long userId) {
-        return userToConnectionIds.getOrDefault(userId, Set.of()).stream()
+    public Set<ConnectionContext> findUserConnections(Long tenantId, Long userId) {
+        return userToConnectionIds.getOrDefault(new TenantUserKey(tenantId, userId), Set.of()).stream()
                 .map(this::findByConnectionId)
                 .flatMap(Optional::stream)
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private TenantUserKey userKey(ConnectionDescriptor descriptor) {
+        return new TenantUserKey(descriptor.tenantId(), descriptor.userId());
     }
 
 }

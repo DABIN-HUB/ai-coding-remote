@@ -58,7 +58,8 @@ public class RelayPresenceRegistry {
             } else {
                 UserRoutePayload route = new UserRoutePayload(relayNodeId, descriptor.connectionId(),
                         descriptor.tenantId(), descriptor.userId(), now, now);
-                setJson(AgentCoordinationKeys.userRoute(descriptor.userId(), descriptor.connectionId()), route);
+                setJson(AgentCoordinationKeys.userRoute(descriptor.tenantId(), descriptor.userId(),
+                        descriptor.connectionId()), route);
             }
         }).subscribeOn(Schedulers.boundedElastic());
     }
@@ -73,8 +74,8 @@ public class RelayPresenceRegistry {
                 compareDelete(AgentCoordinationKeys.devicePresence(descriptor.deviceId()), descriptor.connectionId());
                 compareDelete(AgentCoordinationKeys.deviceRoute(descriptor.deviceId()), descriptor.connectionId());
             } else if (descriptor.userId() != null) {
-                redissonClient.getBucket(AgentCoordinationKeys.userRoute(descriptor.userId(),
-                        descriptor.connectionId())).delete();
+                redissonClient.getBucket(AgentCoordinationKeys.userRoute(descriptor.tenantId(),
+                        descriptor.userId(), descriptor.connectionId())).delete();
             }
         }).subscribeOn(Schedulers.boundedElastic());
     }

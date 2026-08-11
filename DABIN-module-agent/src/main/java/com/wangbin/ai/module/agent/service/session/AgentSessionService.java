@@ -1,0 +1,19 @@
+package com.wangbin.ai.module.agent.service.session;
+
+import com.wangbin.ai.framework.common.pojo.PageResult;
+import com.wangbin.ai.module.agent.controller.admin.message.vo.AgentMessagePageReqVO;
+import com.wangbin.ai.module.agent.controller.admin.message.vo.AgentMessageRespVO;
+import com.wangbin.ai.module.agent.controller.admin.session.vo.*;
+
+public interface AgentSessionService {
+
+    AgentSessionRespVO createSession(AgentSessionCreateReqVO reqVO, Long userId);
+
+    PageResult<AgentSessionRespVO> getSessionPage(AgentSessionPageReqVO reqVO, Long userId);
+
+    AgentSessionRespVO getSession(String sessionId, Long userId);
+
+    AgentCommandRespVO sendPrompt(AgentSessionSendPromptReqVO reqVO, Long userId);
+
+    PageResult<AgentMessageRespVO> getMessagePage(String sessionId, AgentMessagePageReqVO reqVO, Long userId);
+}

@@ -1,6 +1,7 @@
 package com.wangbin.ai.agent.contract.command;
 
 import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.enums.AgentType;
 
 import java.time.Instant;
 import java.util.Map;
@@ -13,7 +14,9 @@ public record AgentCommand(
         Long tenantId,
         Long userId,
         String deviceId,
+        String projectId,
         String sessionId,
+        AgentType agentType,
         CommandType commandType,
         AgentCommandPayload payload,
         Instant createdAt,
@@ -23,6 +26,7 @@ public record AgentCommand(
 
     public AgentCommand {
         commandId = commandId == null || commandId.isBlank() ? UUID.randomUUID().toString() : commandId;
+        agentType = agentType == null ? AgentType.UNKNOWN : agentType;
         commandType = Objects.requireNonNull(commandType, "commandType must not be null");
         createdAt = createdAt == null ? Instant.now() : createdAt;
         extensions = extensions == null ? Map.of() : Map.copyOf(extensions);

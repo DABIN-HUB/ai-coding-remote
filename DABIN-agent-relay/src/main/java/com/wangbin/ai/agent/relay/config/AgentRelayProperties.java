@@ -26,6 +26,8 @@ public class AgentRelayProperties {
 
     private Duration presenceTtl = Duration.ofSeconds(90);
 
+    private long eventIngressStreamMaxLen = 10000;
+
     public String getNodeId() {
         return nodeId;
     }
@@ -80,6 +82,14 @@ public class AgentRelayProperties {
 
     public void setPresenceTtl(Duration presenceTtl) {
         this.presenceTtl = presenceTtl;
+    }
+
+    public long getEventIngressStreamMaxLen() {
+        return eventIngressStreamMaxLen;
+    }
+
+    public void setEventIngressStreamMaxLen(long eventIngressStreamMaxLen) {
+        this.eventIngressStreamMaxLen = eventIngressStreamMaxLen;
     }
 
 }

@@ -2,6 +2,9 @@ package com.wangbin.ai.agent.daemon.cloud.relay;
 
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wangbin.ai.agent.contract.command.AgentCommand;
+import com.wangbin.ai.agent.contract.command.CommandAck;
+import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.protocol.AgentProtocol;
 import com.wangbin.ai.agent.contract.websocket.HelloPayload;
 import com.wangbin.ai.agent.contract.websocket.PingPayload;
@@ -11,6 +14,7 @@ import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
 import com.wangbin.ai.agent.contract.websocket.WsMessageType;
 import com.wangbin.ai.agent.daemon.cloud.controlplane.ControlPlaneClient;
 import com.wangbin.ai.agent.daemon.cloud.controlplane.RelayTicketResponse;
+import com.wangbin.ai.agent.daemon.command.AgentCommandHandler;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
@@ -27,7 +31,6 @@ import java.net.http.WebSocket;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -42,7 +45,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * newer authenticated connection.
  */
 @Component
-public class RelayWebSocketClient {
+public class RelayWebSocketClient implements DaemonOutboundSender {
 
     private static final Logger log = LoggerFactory.getLogger(RelayWebSocketClient.class);
 
@@ -51,6 +54,8 @@ public class RelayWebSocketClient {
     private final ControlPlaneClient controlPlaneClient;
     private final ScheduledExecutorService cloudScheduler;
     private final RelayWebSocketConnector connector;
+    private final AgentCommandHandler commandHandler;
+    private final DaemonOutboundChannel outboundChannel;
     private final AtomicReference<RelayConnectionState> state =
             new AtomicReference<>(RelayConnectionState.DISCONNECTED);
     private final AtomicLong generation = new AtomicLong();
@@ -63,12 +68,15 @@ public class RelayWebSocketClient {
     private volatile int reconnectAttempt;
     private final AtomicLong attemptSequence = new AtomicLong();
     private volatile long activeAttemptId;
+    private volatile DeviceCredentialState activeCredential;
 
     public RelayWebSocketClient(ObjectMapper objectMapper,
                                 AgentDaemonProperties properties,
                                 ControlPlaneClient controlPlaneClient,
-                                @Qualifier("agentCloudScheduler") ScheduledExecutorService cloudScheduler) {
-        this(objectMapper, properties, controlPlaneClient, cloudScheduler,
+                                @Qualifier("agentCloudScheduler") ScheduledExecutorService cloudScheduler,
+                                AgentCommandHandler commandHandler,
+                                DaemonOutboundChannel outboundChannel) {
+        this(objectMapper, properties, controlPlaneClient, cloudScheduler, commandHandler, outboundChannel,
                 (relayUri, listener) -> HttpClient.newHttpClient()
                         .newWebSocketBuilder()
                         .buildAsync(relayUri, listener));
@@ -79,10 +87,24 @@ public class RelayWebSocketClient {
                          ControlPlaneClient controlPlaneClient,
                          ScheduledExecutorService cloudScheduler,
                          RelayWebSocketConnector connector) {
+        this(objectMapper, properties, controlPlaneClient, cloudScheduler,
+                (command, credential, outboundSender) -> {
+                }, new DaemonOutboundChannel(objectMapper, properties), connector);
+    }
+
+    RelayWebSocketClient(ObjectMapper objectMapper,
+                         AgentDaemonProperties properties,
+                         ControlPlaneClient controlPlaneClient,
+                         ScheduledExecutorService cloudScheduler,
+                         AgentCommandHandler commandHandler,
+                         DaemonOutboundChannel outboundChannel,
+                         RelayWebSocketConnector connector) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.controlPlaneClient = controlPlaneClient;
         this.cloudScheduler = cloudScheduler;
+        this.commandHandler = commandHandler;
+        this.outboundChannel = outboundChannel;
         this.connector = connector;
     }
 
@@ -103,6 +125,7 @@ public class RelayWebSocketClient {
             reconnectAttempt = 0;
             activeAttemptId = 0;
             state.set(RelayConnectionState.DISCONNECTED);
+            activeCredential = credential;
             currentGeneration = generation.incrementAndGet();
             scheduleConnectLocked(credential, currentGeneration, Duration.ZERO);
         }
@@ -117,6 +140,7 @@ public class RelayWebSocketClient {
             connectInFlight = false;
             reconnectAttempt = 0;
             activeAttemptId = 0;
+            activeCredential = null;
             cancelFuture(reconnectFuture);
             cancelFuture(authTimeoutFuture);
             reconnectFuture = null;
@@ -188,13 +212,14 @@ public class RelayWebSocketClient {
             listener.attach(socket);
             scheduleAuthTimeoutLocked(credential, expectedGeneration, attemptId, socket);
         }
-        send(socket, WsEnvelope.of(WsMessageType.HELLO,
-                new HelloPayload(AgentProtocol.VERSION, ticket.ticket())))
-                .whenComplete((ignored, sendError) -> {
-                    if (sendError != null) {
-                        handleDisconnect(credential, expectedGeneration, attemptId, socket, sendError);
-                    }
-                });
+        boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.HELLO,
+                new HelloPayload(AgentProtocol.VERSION, ticket.ticket())),
+                () -> handleDisconnect(credential, expectedGeneration, attemptId, socket,
+                        new AgentConnectionException("failed to send HELLO", null)));
+        if (!accepted) {
+            handleDisconnect(credential, expectedGeneration, attemptId, socket,
+                    new AgentConnectionException("daemon outbound queue rejected HELLO", null));
+        }
     }
 
     private void scheduleAuthTimeoutLocked(DeviceCredentialState credential, long expectedGeneration, long attemptId,
@@ -272,14 +297,34 @@ public class RelayWebSocketClient {
         return Duration.ofMillis(Math.min(capped + jitter, max.toMillis()));
     }
 
-    private CompletionStage<WebSocket> send(WebSocket socket, WsEnvelope<?> envelope) {
-        try {
-            return socket.sendText(objectMapper.writeValueAsString(envelope), true);
-        } catch (Exception ex) {
-            CompletableFuture<WebSocket> failed = new CompletableFuture<>();
-            failed.completeExceptionally(new AgentProtocolException("failed to serialize relay WebSocket message", ex));
-            return failed;
+    private boolean sendEnvelope(WebSocket socket, WsEnvelope<?> envelope, Runnable failureHandler) {
+        if (socket == null) {
+            return false;
         }
+        return outboundChannel.enqueue(socket, envelope, failureHandler);
+    }
+
+    @Override
+    public boolean sendCommandAck(CommandAck ack) {
+        return sendEnvelope(webSocket, WsEnvelope.of(WsMessageType.COMMAND_ACK, ack),
+                () -> handleActiveSendFailure(new AgentConnectionException("failed to send CommandAck", null)));
+    }
+
+    @Override
+    public boolean sendAgentEvent(AgentEvent event) {
+        return sendEnvelope(webSocket, WsEnvelope.of(WsMessageType.AGENT_EVENT, event),
+                () -> handleActiveSendFailure(new AgentConnectionException("failed to send AgentEvent", null)));
+    }
+
+    private void handleActiveSendFailure(Throwable throwable) {
+        WebSocket socket = webSocket;
+        DeviceCredentialState credential = activeCredential;
+        if (credential == null) {
+            return;
+        }
+        long expectedGeneration = generation.get();
+        long attemptId = activeAttemptId;
+        handleDisconnect(credential, expectedGeneration, attemptId, socket, throwable);
     }
 
     private void cancelFuture(ScheduledFuture<?> future) {
@@ -352,16 +397,22 @@ public class RelayWebSocketClient {
                 }
                 if (envelope.type() == WsMessageType.PING) {
                     WsEnvelope<PingPayload> ping = objectMapper.readValue(json, envelopeType(PingPayload.class));
-                    send(socket, WsEnvelope.of(WsMessageType.PONG,
-                            new PongPayload(ping.payload() == null ? null : ping.payload().pingId(), Instant.now())))
-                            .whenComplete((ignored, throwable) -> {
-                                if (throwable != null) {
-                                    handleDisconnect(credential, expectedGeneration, attemptId, socket, throwable);
-                                }
-                            });
+                    boolean accepted = sendEnvelope(socket, WsEnvelope.of(WsMessageType.PONG,
+                                    new PongPayload(ping.payload() == null ? null : ping.payload().pingId(), Instant.now())),
+                            () -> handleDisconnect(credential, expectedGeneration, attemptId, socket,
+                                    new AgentConnectionException("failed to send PONG", null)));
+                    if (!accepted) {
+                        handleDisconnect(credential, expectedGeneration, attemptId, socket,
+                                new AgentConnectionException("daemon outbound queue rejected PONG", null));
+                    }
                     return;
                 }
                 if (envelope.type() == WsMessageType.PONG) {
+                    return;
+                }
+                if (envelope.type() == WsMessageType.AGENT_COMMAND) {
+                    WsEnvelope<AgentCommand> command = objectMapper.readValue(json, envelopeType(AgentCommand.class));
+                    commandHandler.handle(command.payload(), credential, RelayWebSocketClient.this);
                     return;
                 }
                 log.debug("ignored relay message before AgentEvent uplink is enabled: type={}", envelope.type());

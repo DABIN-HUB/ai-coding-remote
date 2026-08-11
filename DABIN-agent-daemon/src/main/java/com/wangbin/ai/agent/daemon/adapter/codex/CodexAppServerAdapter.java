@@ -104,7 +104,8 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         if (nativeSessionId == null || nativeSessionId.isBlank()) {
             throw new AgentProtocolException("thread/start response did not contain thread.id: " + response);
         }
-        String platformSessionId = UUID.randomUUID().toString();
+        String platformSessionId = request.platformSessionId() == null || request.platformSessionId().isBlank()
+                ? UUID.randomUUID().toString() : request.platformSessionId();
         CodexSessionContext context = new CodexSessionContext(platformSessionId, nativeSessionId, request.tenantId(),
                 request.userId(), request.deviceId(), request.projectId(), workspace.toString(), AgentType.CODEX);
         platformSessions.put(platformSessionId, context);

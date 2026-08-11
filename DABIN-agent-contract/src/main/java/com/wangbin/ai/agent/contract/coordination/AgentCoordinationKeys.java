@@ -18,7 +18,14 @@ public final class AgentCoordinationKeys {
     private static final String USER_ROUTE_PREFIX = "agent:route:user:";
     private static final String RELAY_NODE_PREFIX = "agent:relay:node:";
     private static final String PAIRING_LOCK_PREFIX = "agent:lock:pair:";
+    private static final String COMMAND_IDEMPOTENCY_LOCK_PREFIX = "agent:lock:command:";
+    private static final String RELAY_COMMAND_CHANNEL_PREFIX = "agent:relay:command:";
+    private static final String EVENT_INGRESS_STREAM = "agent:event:ingress";
     private static final String SHA_256_ALGORITHM = "SHA-256";
+    public static final String EVENT_INGRESS_FIELD_TYPE = "type";
+    public static final String EVENT_INGRESS_FIELD_PAYLOAD = "payload";
+    public static final String EVENT_INGRESS_TYPE_AGENT_EVENT = "AGENT_EVENT";
+    public static final String EVENT_INGRESS_TYPE_COMMAND_ACK = "COMMAND_ACK";
 
     private AgentCoordinationKeys() {
     }
@@ -39,8 +46,8 @@ public final class AgentCoordinationKeys {
         return DEVICE_ROUTE_PREFIX + deviceId;
     }
 
-    public static String userRoute(Long userId, String connectionId) {
-        return USER_ROUTE_PREFIX + userId + ":" + connectionId;
+    public static String userRoute(Long tenantId, Long userId, String connectionId) {
+        return USER_ROUTE_PREFIX + tenantId + ":" + userId + ":" + connectionId;
     }
 
     public static String relayNode(String relayNodeId) {
@@ -49,6 +56,19 @@ public final class AgentCoordinationKeys {
 
     public static String pairingLock(Long tenantId, Long userId, String installationId) {
         return PAIRING_LOCK_PREFIX + tenantId + ":" + userId + ":" + sha256UrlSafe(installationId);
+    }
+
+    public static String commandIdempotencyLock(Long tenantId, Long userId, String sessionId, String clientRequestId) {
+        return COMMAND_IDEMPOTENCY_LOCK_PREFIX + tenantId + ":" + userId + ":" + sha256UrlSafe(sessionId)
+                + ":" + sha256UrlSafe(clientRequestId);
+    }
+
+    public static String relayCommandChannel(String relayNodeId) {
+        return RELAY_COMMAND_CHANNEL_PREFIX + relayNodeId;
+    }
+
+    public static String eventIngressStream() {
+        return EVENT_INGRESS_STREAM;
     }
 
     private static String sha256UrlSafe(String value) {

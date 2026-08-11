@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.wangbin.ai.agent.contract.coordination.RelaySubjectType;
 import com.wangbin.ai.agent.contract.coordination.RelayTicketPayload;
+import com.wangbin.ai.agent.contract.command.CommandAck;
+import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.protocol.AgentProtocol;
 import com.wangbin.ai.agent.contract.websocket.HelloPayload;
 import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
@@ -13,6 +15,8 @@ import com.wangbin.ai.agent.relay.auth.RelayTicketAuthenticator;
 import com.wangbin.ai.agent.relay.config.AgentRelayProperties;
 import com.wangbin.ai.agent.relay.connection.ConnectionDescriptor;
 import com.wangbin.ai.agent.relay.connection.InMemoryConnectionManager;
+import com.wangbin.ai.agent.relay.dispatch.EventDispatcher;
+import com.wangbin.ai.agent.relay.event.AgentEventIngressPublisher;
 import com.wangbin.ai.agent.relay.presence.RelayPresenceRegistry;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
@@ -63,7 +67,8 @@ class RelayWebSocketHandlerTest {
         RelayTicketPayload ticket = deviceTicket();
         StubPresenceRegistry presenceRegistry = new StubPresenceRegistry(properties);
         RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
-                new StubAuthenticator(ticket), connectionManager, presenceRegistry);
+                new StubAuthenticator(ticket), connectionManager, presenceRegistry,
+                new NoopEventDispatcher(), new NoopIngressPublisher());
         TestWebSocketSession session = new TestWebSocketSession(hello(RELAY_TICKET));
 
         handler.handle(session).block(TEST_BLOCK_TIMEOUT);
@@ -80,7 +85,7 @@ class RelayWebSocketHandlerTest {
         AgentRelayProperties properties = properties();
         RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
                 new StubAuthenticator(null), new InMemoryConnectionManager(properties),
-                new StubPresenceRegistry(properties));
+                new StubPresenceRegistry(properties), new NoopEventDispatcher(), new NoopIngressPublisher());
         TestWebSocketSession session = new TestWebSocketSession(hello(CONSUMED_RELAY_TICKET));
 
         assertThatThrownBy(() -> handler.handle(session).block(TEST_BLOCK_TIMEOUT))
@@ -92,7 +97,8 @@ class RelayWebSocketHandlerTest {
         AgentRelayProperties properties = properties();
         CountingAuthenticator authenticator = new CountingAuthenticator(deviceTicket());
         RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
-                authenticator, new InMemoryConnectionManager(properties), new StubPresenceRegistry(properties));
+                authenticator, new InMemoryConnectionManager(properties), new StubPresenceRegistry(properties),
+                new NoopEventDispatcher(), new NoopIngressPublisher());
         String invalidHello = objectMapper.writeValueAsString(new WsEnvelope<>(null, WsMessageType.HELLO,
                 INCOMPATIBLE_PROTOCOL_VERSION, null,
                 new HelloPayload(INCOMPATIBLE_PROTOCOL_VERSION, RELAY_TICKET)));
@@ -173,6 +179,36 @@ class RelayWebSocketHandlerTest {
 
         @Override
         public Mono<Void> unregister(ConnectionDescriptor descriptor) {
+            return Mono.empty();
+        }
+    }
+
+    private static final class NoopEventDispatcher implements EventDispatcher {
+
+        @Override
+        public Mono<Void> dispatchToDevice(String deviceId, AgentEvent event) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Void> dispatchToUser(Long tenantId, Long userId, AgentEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    private static final class NoopIngressPublisher extends AgentEventIngressPublisher {
+
+        private NoopIngressPublisher() {
+            super(null, null, null, null);
+        }
+
+        @Override
+        public Mono<Void> publish(ConnectionDescriptor descriptor, String relayNodeId, AgentEvent event) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Void> publishAck(ConnectionDescriptor descriptor, String relayNodeId, CommandAck ack) {
             return Mono.empty();
         }
     }

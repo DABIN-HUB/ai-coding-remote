@@ -3,9 +3,11 @@ package com.wangbin.ai.agent.relay.websocket;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wangbin.ai.agent.contract.command.CommandAck;
 import com.wangbin.ai.agent.contract.coordination.RelaySubjectType;
 import com.wangbin.ai.agent.contract.coordination.RelayTicketPayload;
 import com.wangbin.ai.agent.contract.enums.EventPriority;
+import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.protocol.AgentProtocol;
 import com.wangbin.ai.agent.contract.websocket.*;
 import com.wangbin.ai.agent.relay.auth.RelayTicketAuthenticator;
@@ -13,6 +15,8 @@ import com.wangbin.ai.agent.relay.backpressure.ConnectionOutboundChannel;
 import com.wangbin.ai.agent.relay.backpressure.OutboundMessage;
 import com.wangbin.ai.agent.relay.config.AgentRelayProperties;
 import com.wangbin.ai.agent.relay.connection.*;
+import com.wangbin.ai.agent.relay.dispatch.EventDispatcher;
+import com.wangbin.ai.agent.relay.event.AgentEventIngressPublisher;
 import com.wangbin.ai.agent.relay.presence.RelayPresenceRegistry;
 import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.stereotype.Component;
@@ -34,16 +38,22 @@ public class RelayWebSocketHandler implements WebSocketHandler {
     private final RelayTicketAuthenticator ticketAuthenticator;
     private final ConnectionManager connectionManager;
     private final RelayPresenceRegistry presenceRegistry;
+    private final EventDispatcher eventDispatcher;
+    private final AgentEventIngressPublisher ingressPublisher;
 
     public RelayWebSocketHandler(ObjectMapper objectMapper, AgentRelayProperties properties,
                                  RelayTicketAuthenticator ticketAuthenticator,
                                  ConnectionManager connectionManager,
-                                 RelayPresenceRegistry presenceRegistry) {
+                                 RelayPresenceRegistry presenceRegistry,
+                                 EventDispatcher eventDispatcher,
+                                 AgentEventIngressPublisher ingressPublisher) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.ticketAuthenticator = ticketAuthenticator;
         this.connectionManager = connectionManager;
         this.presenceRegistry = presenceRegistry;
+        this.eventDispatcher = eventDispatcher;
+        this.ingressPublisher = ingressPublisher;
     }
 
     @Override
@@ -90,7 +100,43 @@ public class RelayWebSocketHandler implements WebSocketHandler {
                         return enqueueCritical(context, WsEnvelope.of(WsMessageType.PONG,
                                 new PongPayload(null, Instant.now())));
                     }
+                    if (envelope.type() == WsMessageType.AGENT_EVENT) {
+                        return handleAgentEvent(message.getPayloadAsText(), context);
+                    }
+                    if (envelope.type() == WsMessageType.COMMAND_ACK) {
+                        return handleCommandAck(message.getPayloadAsText(), context);
+                    }
                     return Mono.empty();
+                });
+    }
+
+    private Mono<Void> handleAgentEvent(String json, ConnectionContext context) {
+        if (context.descriptor().role() != ConnectionRole.DEVICE) {
+            return Mono.error(new IllegalStateException("only DEVICE connection can upload AgentEvent"));
+        }
+        return parseEnvelope(json, AgentEvent.class)
+                .flatMap(envelope -> {
+                    AgentEvent event = envelope.payload();
+                    if (event == null || !context.descriptor().tenantId().equals(event.tenantId())
+                            || !context.descriptor().deviceId().equals(event.deviceId())) {
+                        return Mono.error(new IllegalStateException("AgentEvent identity does not match connection"));
+                    }
+                    return ingressPublisher.publish(context.descriptor(), properties.getNodeId(), event)
+                            .then(eventDispatcher.dispatchToUser(event.tenantId(), event.userId(), event));
+                });
+    }
+
+    private Mono<Void> handleCommandAck(String json, ConnectionContext context) {
+        if (context.descriptor().role() != ConnectionRole.DEVICE) {
+            return Mono.error(new IllegalStateException("only DEVICE connection can upload CommandAck"));
+        }
+        return parseEnvelope(json, CommandAck.class)
+                .flatMap(envelope -> {
+                    CommandAck ack = envelope.payload();
+                    if (ack == null || !context.descriptor().deviceId().equals(ack.deviceId())) {
+                        return Mono.error(new IllegalStateException("CommandAck identity does not match connection"));
+                    }
+                    return ingressPublisher.publishAck(context.descriptor(), properties.getNodeId(), ack);
                 });
     }
 
