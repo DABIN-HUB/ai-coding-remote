@@ -7,7 +7,9 @@ import org.springframework.stereotype.Component;
 
 import java.net.http.WebSocket;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -23,6 +25,8 @@ public class DaemonOutboundChannel {
     private final Set<Long> queuedReliableIds = new HashSet<>();
     private final AtomicBoolean draining = new AtomicBoolean(false);
     private long reliableSequence;
+    private WebSocket activeBusinessSocket;
+    private Runnable activeBusinessFailureHandler;
 
     public DaemonOutboundChannel(ObjectMapper objectMapper, AgentDaemonProperties properties) {
         this.objectMapper = objectMapper;
@@ -50,28 +54,43 @@ public class DaemonOutboundChannel {
         return true;
     }
 
-    public boolean replayReliable(WebSocket socket, Runnable failureHandler) {
+    /**
+     * Activates the business socket only after all existing reliable records are
+     * bound to the new socket queue. Concurrent reliable sends can only enter the
+     * monitor after this point, so they are appended after the replay backlog.
+     */
+    public boolean activateConnectionAndReplay(WebSocket socket, Runnable failureHandler) {
+        return activateConnectionAndReplay(socket, failureHandler, null);
+    }
+
+    boolean activateConnectionAndReplay(WebSocket socket, Runnable failureHandler, Runnable beforeReplayHook) {
         if (socket == null) {
             return false;
         }
-        boolean queuedAll = true;
+        boolean queuedAll;
+        List<Long> activationQueuedIds = new ArrayList<>();
         synchronized (monitor) {
-            for (ReliableRecord record : reliablePending) {
-                if (queuedReliableIds.contains(record.id())) {
-                    continue;
-                }
-                if (!offerLocked(new OutboundEnvelope(socket, record.envelope(),
-                        OutboundReliability.RELIABLE, record.id(), failureHandler))) {
-                    queuedAll = false;
-                    break;
-                }
+            if (beforeReplayHook != null) {
+                beforeReplayHook.run();
+            }
+            queuedAll = queueReliablePendingLocked(socket, failureHandler, activationQueuedIds);
+            if (queuedAll) {
+                activeBusinessSocket = socket;
+                activeBusinessFailureHandler = failureHandler;
+            } else {
+                rollbackActivationLocked(socket, activationQueuedIds);
             }
         }
-        drain();
-        if (!queuedAll && failureHandler != null) {
+        if (queuedAll) {
+            drain();
+        } else if (failureHandler != null) {
             failureHandler.run();
         }
         return queuedAll;
+    }
+
+    public boolean replayReliable(WebSocket socket, Runnable failureHandler) {
+        return activateConnectionAndReplay(socket, failureHandler);
     }
 
     public void removeQueuedForSocket(WebSocket socket) {
@@ -79,6 +98,10 @@ public class DaemonOutboundChannel {
             return;
         }
         synchronized (monitor) {
+            if (activeBusinessSocket == socket) {
+                activeBusinessSocket = null;
+                activeBusinessFailureHandler = null;
+            }
             queue.removeIf(envelope -> {
                 boolean remove = envelope.socket() == socket;
                 if (remove && envelope.reliableId() != null) {
@@ -94,6 +117,8 @@ public class DaemonOutboundChannel {
             queue.clear();
             reliablePending.clear();
             queuedReliableIds.clear();
+            activeBusinessSocket = null;
+            activeBusinessFailureHandler = null;
         }
     }
 
@@ -105,22 +130,50 @@ public class DaemonOutboundChannel {
 
     private boolean enqueueReliable(WebSocket socket, WsEnvelope<?> envelope, Runnable failureHandler) {
         boolean queued = true;
+        Runnable effectiveFailureHandler;
         synchronized (monitor) {
             if (reliablePending.size() >= properties.getReliableOutboundCapacity()) {
                 return false;
             }
             ReliableRecord record = new ReliableRecord(++reliableSequence, envelope);
             reliablePending.add(record);
-            if (socket != null) {
-                queued = offerLocked(new OutboundEnvelope(socket, envelope, OutboundReliability.RELIABLE,
-                        record.id(), failureHandler));
+            WebSocket targetSocket = activeBusinessSocket != null ? activeBusinessSocket : socket;
+            effectiveFailureHandler = activeBusinessSocket != null ? activeBusinessFailureHandler : failureHandler;
+            if (targetSocket != null) {
+                queued = offerLocked(new OutboundEnvelope(targetSocket, envelope, OutboundReliability.RELIABLE,
+                        record.id(), effectiveFailureHandler));
             }
         }
         drain();
-        if (!queued && failureHandler != null) {
-            failureHandler.run();
+        if (!queued && effectiveFailureHandler != null) {
+            effectiveFailureHandler.run();
         }
         return true;
+    }
+
+    private boolean queueReliablePendingLocked(WebSocket socket, Runnable failureHandler, List<Long> queuedIds) {
+        for (ReliableRecord record : reliablePending) {
+            if (queuedReliableIds.contains(record.id())) {
+                continue;
+            }
+            if (!offerLocked(new OutboundEnvelope(socket, record.envelope(),
+                    OutboundReliability.RELIABLE, record.id(), failureHandler))) {
+                return false;
+            }
+            queuedIds.add(record.id());
+        }
+        return true;
+    }
+
+    private void rollbackActivationLocked(WebSocket socket, List<Long> queuedIds) {
+        queue.removeIf(envelope -> envelope.socket() == socket
+                && envelope.reliableId() != null
+                && queuedIds.contains(envelope.reliableId()));
+        queuedReliableIds.removeAll(queuedIds);
+        if (activeBusinessSocket == socket) {
+            activeBusinessSocket = null;
+            activeBusinessFailureHandler = null;
+        }
     }
 
     private boolean offerLocked(OutboundEnvelope envelope) {

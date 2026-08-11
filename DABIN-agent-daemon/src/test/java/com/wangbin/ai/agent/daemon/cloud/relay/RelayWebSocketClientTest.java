@@ -22,6 +22,7 @@ import com.wangbin.ai.agent.daemon.cloud.controlplane.RelayTicketResponse;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
@@ -33,6 +34,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -69,6 +71,7 @@ class RelayWebSocketClientTest {
     private static final long WAIT_TIMEOUT_SECONDS = 2L;
     private static final Duration WAIT_POLL_INTERVAL = Duration.ofMillis(10);
     private static final int ABNORMAL_CLOSE_STATUS = 1006;
+    private static final int REPLAY_RACE_REPETITIONS = 10;
 
     private final ObjectMapper objectMapper = JsonMapper.builder().addModule(new JavaTimeModule()).build();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -268,6 +271,60 @@ class RelayWebSocketClientTest {
         client.stop();
     }
 
+    @RepeatedTest(REPLAY_RACE_REPETITIONS)
+    void welcomeReplayBarrierPreventsNewReliableEventFromPassingOldPendingEvent() throws Exception {
+        AgentDaemonProperties properties = properties();
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+        FakeConnector connector = new FakeConnector(false);
+        RaceActivationChannel outboundChannel = new RaceActivationChannel(objectMapper, properties);
+        RelayWebSocketClient client = new RelayWebSocketClient(objectMapper, properties, controlPlaneClient,
+                scheduler, (command, credential, outboundSender) -> {
+                }, outboundChannel, connector);
+        CountDownLatch concurrentSendStarted = new CountDownLatch(1);
+        AtomicBoolean concurrentAccepted = new AtomicBoolean();
+        AtomicReference<Throwable> concurrentFailure = new AtomicReference<>();
+        Thread concurrentSender = new Thread(() -> {
+            concurrentSendStarted.countDown();
+            try {
+                concurrentAccepted.set(client.sendAgentEvent(sessionEvent("event-b", 11,
+                        AgentEventType.SESSION_IDLE)));
+            } catch (Throwable ex) {
+                concurrentFailure.set(ex);
+            }
+        }, "relay-welcome-replay-race-test");
+        try {
+            client.start(credential());
+            waitUntil(() -> connector.connectCount.get() == 1);
+            Attempt firstAttempt = connector.attempt(0);
+            sendWelcome(firstAttempt, TEST_CONNECTION_ID);
+            waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
+
+            firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
+            waitUntil(() -> connector.connectCount.get() == 2);
+            assertThat(client.sendAgentEvent(sessionEvent("event-a", 10, AgentEventType.SESSION_STARTED))).isTrue();
+            outboundChannel.beforeReplayHook = () -> {
+                concurrentSender.start();
+                await(concurrentSendStarted);
+                waitUntilBlocked(concurrentSender);
+            };
+
+            Attempt secondAttempt = connector.latestAttempt();
+            sendWelcome(secondAttempt, TEST_CONNECTION_ID_SECOND);
+            waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
+            concurrentSender.join(TimeUnit.SECONDS.toMillis(WAIT_TIMEOUT_SECONDS));
+
+            assertThat(concurrentSender.isAlive()).isFalse();
+            assertThat(concurrentFailure.get()).isNull();
+            assertThat(concurrentAccepted).isTrue();
+            assertThat(secondAttempt.socket().sentPayloads).hasSize(3);
+            assertThat(secondAttempt.socket().sentPayloads.get(0)).contains("\"type\":\"HELLO\"");
+            assertThat(secondAttempt.socket().sentPayloads.get(1)).contains("\"eventId\":\"event-a\"", "\"seq\":10");
+            assertThat(secondAttempt.socket().sentPayloads.get(2)).contains("\"eventId\":\"event-b\"", "\"seq\":11");
+        } finally {
+            client.stop();
+        }
+    }
+
     private AgentDaemonProperties properties() {
         AgentDaemonProperties properties = new AgentDaemonProperties();
         properties.getCloud().setReconnectInitialDelay(TEST_RECONNECT_DELAY);
@@ -304,6 +361,28 @@ class RelayWebSocketClientTest {
             Thread.currentThread().interrupt();
             throw new AssertionError(ex);
         }
+    }
+
+    private void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                throw new AssertionError("latch was not released before timeout");
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(ex);
+        }
+    }
+
+    private void waitUntilBlocked(Thread thread) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_TIMEOUT_SECONDS);
+        while (System.nanoTime() < deadline) {
+            if (thread.getState() == Thread.State.BLOCKED) {
+                return;
+            }
+            Thread.onSpinWait();
+        }
+        throw new AssertionError("thread did not block on channel activation monitor");
     }
 
     private void sendWelcome(Attempt attempt, String connectionId) throws Exception {
@@ -376,10 +455,11 @@ class RelayWebSocketClientTest {
 
         @Override
         public CompletableFuture<WebSocket> connect(URI relayUri, WebSocket.Listener webSocketListener) {
-            int attemptNumber = connectCount.incrementAndGet();
+            int attemptNumber = connectCount.get() + 1;
             FakeWebSocket fakeWebSocket = new FakeWebSocket(failSend);
             CompletableFuture<WebSocket> future = new CompletableFuture<>();
             attempts.add(new Attempt(attemptNumber, webSocketListener, fakeWebSocket, future));
+            connectCount.incrementAndGet();
             webSocketListener.onOpen(fakeWebSocket);
             if (completeConnectImmediately.get()) {
                 future.complete(fakeWebSocket);
@@ -398,6 +478,20 @@ class RelayWebSocketClientTest {
 
     private record Attempt(int attemptNumber, WebSocket.Listener listener, FakeWebSocket socket,
                            CompletableFuture<WebSocket> future) {
+    }
+
+    private static final class RaceActivationChannel extends DaemonOutboundChannel {
+
+        private volatile Runnable beforeReplayHook;
+
+        private RaceActivationChannel(ObjectMapper objectMapper, AgentDaemonProperties properties) {
+            super(objectMapper, properties);
+        }
+
+        @Override
+        public boolean activateConnectionAndReplay(WebSocket socket, Runnable failureHandler) {
+            return super.activateConnectionAndReplay(socket, failureHandler, beforeReplayHook);
+        }
     }
 
     private static final class CaptureScheduledExecutor extends ScheduledThreadPoolExecutor {

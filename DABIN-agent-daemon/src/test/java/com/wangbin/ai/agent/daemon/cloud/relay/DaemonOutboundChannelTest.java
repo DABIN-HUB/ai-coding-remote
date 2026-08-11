@@ -11,10 +11,13 @@ import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
+import com.wangbin.ai.agent.contract.protocol.AgentProtocol;
+import com.wangbin.ai.agent.contract.websocket.HelloPayload;
 import com.wangbin.ai.agent.contract.websocket.PongPayload;
 import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
 import com.wangbin.ai.agent.contract.websocket.WsMessageType;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import java.net.http.WebSocket;
@@ -24,7 +27,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,6 +42,8 @@ class DaemonOutboundChannelTest {
     private static final String TEST_PROJECT_ID = "prj-1";
     private static final String TEST_SESSION_ID = "ses-1";
     private static final String TEST_COMMAND_ID = "cmd-1";
+    private static final int REPLAY_RACE_REPETITIONS = 20;
+    private static final long WAIT_TIMEOUT_SECONDS = 2L;
 
     @Test
     void enqueueIsBoundedAndSendsSequentially() {
@@ -140,8 +148,57 @@ class DaemonOutboundChannelTest {
         assertThat(channel.reliablePendingSize()).isEqualTo(1);
     }
 
+    @RepeatedTest(REPLAY_RACE_REPETITIONS)
+    void activationReplayBarrierKeepsPendingReliableBeforeConcurrentReliable() throws Exception {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        properties.setOutboundQueueCapacity(4);
+        properties.setReliableOutboundCapacity(4);
+        DaemonOutboundChannel channel = new DaemonOutboundChannel(objectMapper(), properties);
+        ControlledWebSocket socket = new ControlledWebSocket();
+        CountDownLatch concurrentSendStarted = new CountDownLatch(1);
+        AtomicBoolean concurrentAccepted = new AtomicBoolean();
+        AtomicReference<Throwable> concurrentFailure = new AtomicReference<>();
+        Thread concurrentSender = new Thread(() -> {
+            concurrentSendStarted.countDown();
+            try {
+                concurrentAccepted.set(channel.enqueue(null, sessionStarted("event-b", 11),
+                        OutboundReliability.RELIABLE, null));
+            } catch (Throwable ex) {
+                concurrentFailure.set(ex);
+            }
+        }, "daemon-outbound-replay-race-test");
+
+        assertThat(channel.enqueue(socket, hello(), OutboundReliability.TRANSIENT, null)).isTrue();
+        assertThat(channel.enqueue(null, sessionStarted("event-a", 10), OutboundReliability.RELIABLE, null)).isTrue();
+
+        assertThat(channel.activateConnectionAndReplay(socket, null, () -> {
+            concurrentSender.start();
+            await(concurrentSendStarted);
+            waitUntilBlocked(concurrentSender);
+        })).isTrue();
+        concurrentSender.join(TimeUnit.SECONDS.toMillis(WAIT_TIMEOUT_SECONDS));
+
+        assertThat(concurrentSender.isAlive()).isFalse();
+        assertThat(concurrentFailure.get()).isNull();
+        assertThat(concurrentAccepted).isTrue();
+        assertThat(socket.sentPayloads).hasSize(1);
+        assertThat(socket.sentPayloads.get(0)).contains("\"type\":\"HELLO\"");
+
+        socket.completeNext();
+        assertThat(socket.sentPayloads).hasSize(2);
+        assertThat(socket.sentPayloads.get(1)).contains("\"eventId\":\"event-a\"", "\"seq\":10");
+
+        socket.completeNext();
+        assertThat(socket.sentPayloads).hasSize(3);
+        assertThat(socket.sentPayloads.get(2)).contains("\"eventId\":\"event-b\"", "\"seq\":11");
+    }
+
     private WsEnvelope<PongPayload> pong(String id) {
         return WsEnvelope.of(WsMessageType.PONG, new PongPayload(id, Instant.now()));
+    }
+
+    private WsEnvelope<HelloPayload> hello() {
+        return WsEnvelope.of(WsMessageType.HELLO, new HelloPayload(AgentProtocol.VERSION, "ticket-1"));
     }
 
     private WsEnvelope<CommandAck> ack() {
@@ -165,6 +222,28 @@ class DaemonOutboundChannelTest {
 
     private ObjectMapper objectMapper() {
         return JsonMapper.builder().addModule(new JavaTimeModule()).build();
+    }
+
+    private void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                throw new AssertionError("latch was not released before timeout");
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(ex);
+        }
+    }
+
+    private void waitUntilBlocked(Thread thread) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_TIMEOUT_SECONDS);
+        while (System.nanoTime() < deadline) {
+            if (thread.getState() == Thread.State.BLOCKED) {
+                return;
+            }
+            Thread.onSpinWait();
+        }
+        throw new AssertionError("thread did not block on channel activation monitor");
     }
 
     private static final class ControlledWebSocket implements WebSocket {

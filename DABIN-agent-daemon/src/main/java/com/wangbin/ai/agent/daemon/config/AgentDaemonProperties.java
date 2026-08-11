@@ -2,6 +2,7 @@ package com.wangbin.ai.agent.daemon.config;
 
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Min;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -104,6 +105,11 @@ public class AgentDaemonProperties {
 
     public List<Project> getProjects() {
         return projects;
+    }
+
+    @AssertTrue(message = "reliableOutboundCapacity must be less than or equal to outboundQueueCapacity")
+    public boolean isReliableOutboundCapacityValid() {
+        return reliableOutboundCapacity <= outboundQueueCapacity;
     }
 
     public static class Smoke {

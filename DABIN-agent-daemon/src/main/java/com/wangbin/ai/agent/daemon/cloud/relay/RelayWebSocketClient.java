@@ -291,13 +291,23 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
             authTimeoutFuture = null;
             connectInFlight = false;
             reconnectAttempt = 0;
+            state.set(RelayConnectionState.REPLAYING);
+        }
+        boolean activated = outboundChannel.activateConnectionAndReplay(source,
+                () -> handleAttemptSendFailure(credential, expectedGeneration, attemptId, source,
+                        new AgentConnectionException("failed to replay reliable daemon outbound message", null)));
+        if (!activated) {
+            return;
+        }
+        synchronized (lifecycleMonitor) {
+            if (!isCurrentAttemptLocked(expectedGeneration, attemptId) || webSocket != source) {
+                outboundChannel.removeQueuedForSocket(source);
+                return;
+            }
             state.set(RelayConnectionState.CONNECTED);
         }
         log.info("relay authenticated: deviceId={}, connectionId={}, relayNodeId={}, heartbeatInterval={}",
                 credential.getDeviceId(), payload.connectionId(), payload.relayNodeId(), payload.heartbeatInterval());
-        outboundChannel.replayReliable(source,
-                () -> handleAttemptSendFailure(credential, expectedGeneration, attemptId, source,
-                        new AgentConnectionException("failed to replay reliable daemon outbound message", null)));
     }
 
     private boolean isCurrentAttemptLocked(long expectedGeneration, long attemptId) {
