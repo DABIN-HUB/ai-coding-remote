@@ -35,7 +35,7 @@ class DeltaEventAggregatorTest {
             assertThat(firstFlush).hasSize(1);
             assertThat(firstFlush.getFirst().type()).isEqualTo(AgentEventType.AGENT_MESSAGE_DELTA);
             assertThat(((AgentMessagePayload) firstFlush.getFirst().payload()).content()).isEqualTo("hello");
-            assertThat(firstFlush.getFirst().seq()).isEqualTo(11);
+            assertThat(firstFlush.getFirst().seq()).isZero();
 
             assertThat(aggregator.accept(delta(" world", 2), sequence::incrementAndGet, ignored -> {
             })).hasSize(1);
@@ -48,7 +48,7 @@ class DeltaEventAggregatorTest {
             AgentMessagePayload finalPayload = (AgentMessagePayload) finalized.getFirst().payload();
             assertThat(finalPayload.content()).isEqualTo("hello world");
             assertThat(finalPayload.delta()).isFalse();
-            assertThat(finalized.getFirst().seq()).isGreaterThan(firstFlush.getFirst().seq());
+            assertThat(finalized.getFirst().seq()).isZero();
 
             List<AgentEvent> terminal = aggregator.accept(idle(), sequence::incrementAndGet, ignored -> {
             });
@@ -79,7 +79,7 @@ class DeltaEventAggregatorTest {
             assertThat(latch.await(1, TimeUnit.SECONDS)).isTrue();
             assertThat(flushed).hasSize(1);
             assertThat(flushed.getFirst().type()).isEqualTo(AgentEventType.AGENT_MESSAGE_DELTA);
-            assertThat(flushed.getFirst().seq()).isEqualTo(21);
+            assertThat(flushed.getFirst().seq()).isZero();
         } finally {
             scheduler.shutdownNow();
         }
@@ -103,7 +103,7 @@ class DeltaEventAggregatorTest {
             assertThat(flushed).extracting(AgentEvent::type)
                     .containsExactly(AgentEventType.AGENT_MESSAGE_DELTA);
             assertThat(flushed).extracting(AgentEvent::seq)
-                    .containsExactly(31L);
+                    .containsExactly(0L);
         } finally {
             scheduler.shutdownNow();
         }
@@ -130,7 +130,7 @@ class DeltaEventAggregatorTest {
             assertThat(finalized).extracting(AgentEvent::type)
                     .containsExactly(AgentEventType.AGENT_MESSAGE_DELTA, AgentEventType.AGENT_MESSAGE);
             assertThat(finalized).extracting(AgentEvent::seq)
-                    .containsExactly(41L, 42L);
+                    .containsExactly(0L, 0L);
             assertThat(((AgentMessagePayload) finalized.get(1).payload()).content()).isEqualTo("hello world");
             assertThat(duplicateFinal).isEmpty();
         } finally {
@@ -144,8 +144,11 @@ class DeltaEventAggregatorTest {
         properties.setEventAggregationMaxChars(100);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
+        SerializedSessionEventEmitter emitter = new SerializedSessionEventEmitter();
         AtomicLong sessionASequence = new AtomicLong();
         AtomicLong sessionBSequence = new AtomicLong();
+        List<AgentEvent> sessionAObserved = new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<AgentEvent> sessionBObserved = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         try {
             assertThat(aggregator.accept(delta("a", "session-a", "msg-a"), sessionASequence::incrementAndGet,
@@ -171,10 +174,15 @@ class DeltaEventAggregatorTest {
                     ignored -> {
                     });
 
-            assertThat(concat(sessionAStarted, sessionAFinal, sessionAIdle))
+            concat(sessionAStarted, sessionAFinal, sessionAIdle)
+                    .forEach(event -> emitter.emit(event, sessionASequence::incrementAndGet, sessionAObserved::add));
+            concat(sessionBFinal, sessionBIdle)
+                    .forEach(event -> emitter.emit(event, sessionBSequence::incrementAndGet, sessionBObserved::add));
+
+            assertThat(sessionAObserved)
                     .extracting(AgentEvent::seq)
                     .containsExactly(1L, 2L, 3L, 4L);
-            assertThat(concat(sessionBFinal, sessionBIdle))
+            assertThat(sessionBObserved)
                     .extracting(AgentEvent::seq)
                     .containsExactly(1L, 2L);
         } finally {

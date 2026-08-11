@@ -19,6 +19,7 @@ public class AgentDaemonProperties {
     private int eventAggregationMaxChars = 160;
 
     private final Smoke smoke = new Smoke();
+    private final Cloud cloud = new Cloud();
 
     public int getProcessIoThreads() {
         return processIoThreads;
@@ -48,6 +49,10 @@ public class AgentDaemonProperties {
         return smoke;
     }
 
+    public Cloud getCloud() {
+        return cloud;
+    }
+
     public static class Smoke {
 
         private Duration timeout = Duration.ofMinutes(5);
@@ -60,6 +65,49 @@ public class AgentDaemonProperties {
             this.timeout = timeout;
         }
 
+    }
+
+    public static class Cloud {
+
+        private String controlPlaneUrl = "http://127.0.0.1:48080";
+
+        private String relayUrl = "ws://127.0.0.1:48180/agent/ws";
+
+        private Duration reconnectInitialDelay = Duration.ofSeconds(1);
+
+        private Duration reconnectMaxDelay = Duration.ofSeconds(30);
+
+        public String getControlPlaneUrl() {
+            return controlPlaneUrl;
+        }
+
+        public void setControlPlaneUrl(String controlPlaneUrl) {
+            this.controlPlaneUrl = controlPlaneUrl;
+        }
+
+        public String getRelayUrl() {
+            return relayUrl;
+        }
+
+        public void setRelayUrl(String relayUrl) {
+            this.relayUrl = relayUrl;
+        }
+
+        public Duration getReconnectInitialDelay() {
+            return reconnectInitialDelay;
+        }
+
+        public void setReconnectInitialDelay(Duration reconnectInitialDelay) {
+            this.reconnectInitialDelay = reconnectInitialDelay;
+        }
+
+        public Duration getReconnectMaxDelay() {
+            return reconnectMaxDelay;
+        }
+
+        public void setReconnectMaxDelay(Duration reconnectMaxDelay) {
+            this.reconnectMaxDelay = reconnectMaxDelay;
+        }
     }
 
 }

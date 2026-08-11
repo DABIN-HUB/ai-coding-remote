@@ -23,6 +23,11 @@ public class AgentDaemonExecutorConfiguration {
         return Executors.newSingleThreadScheduledExecutor(namedThreadFactory("agent-event-scheduler-"));
     }
 
+    @Bean(destroyMethod = "shutdown")
+    public ScheduledExecutorService agentCloudScheduler() {
+        return Executors.newSingleThreadScheduledExecutor(namedThreadFactory("agent-cloud-"));
+    }
+
     private static ThreadFactory namedThreadFactory(String prefix) {
         AtomicInteger counter = new AtomicInteger();
         return runnable -> {

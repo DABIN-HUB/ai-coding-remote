@@ -11,6 +11,7 @@ import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants
 import com.wangbin.ai.agent.daemon.config.AgentCodexProperties;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
+import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.process.ManagedProcess;
 import com.wangbin.ai.agent.daemon.process.ProcessState;
@@ -129,6 +130,7 @@ class CodexAppServerAdapterTest {
         List<TestRpcClient> remainingClients = new ArrayList<>(clients);
         return new CodexAppServerAdapter(objectMapper, codexProperties, new TestAppServerProcess(), workspaceManager(workspace),
                 new CodexEventMapper(), new DeltaEventAggregator(daemonProperties, scheduler),
+                new SerializedSessionEventEmitter(),
                 processIoExecutor) {
 
             @Override

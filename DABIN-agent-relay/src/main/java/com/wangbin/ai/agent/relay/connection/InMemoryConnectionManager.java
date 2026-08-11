@@ -31,7 +31,14 @@ public class InMemoryConnectionManager implements ConnectionManager {
                     new BoundedOutboundMessageQueue(properties.getOutboundQueueCapacity()));
             byConnectionId.put(descriptor.connectionId(), context);
             if (descriptor.deviceId() != null && !descriptor.deviceId().isBlank()) {
-                deviceToConnectionId.put(descriptor.deviceId(), descriptor.connectionId());
+                String oldConnectionId = deviceToConnectionId.put(descriptor.deviceId(), descriptor.connectionId());
+                if (oldConnectionId != null && !oldConnectionId.equals(descriptor.connectionId())) {
+                    ConnectionContext old = byConnectionId.remove(oldConnectionId);
+                    if (old != null) {
+                        old.markClosed();
+                        old.session().close().subscribe();
+                    }
+                }
             }
             if (descriptor.userId() != null) {
                 userToConnectionIds.computeIfAbsent(descriptor.userId(), ignored -> ConcurrentHashMap.newKeySet())

@@ -59,17 +59,17 @@ public class DeltaEventAggregator {
             }
             completedMessageKeys.add(key);
             List<AgentEvent> flushed = flushMessage(key);
-            flushed.add(copyWithSeq(event, sequenceSupplier.getAsLong()));
+            flushed.add(copyWithSeq(event, 0));
             return flushed;
         }
         if (event.type() == AgentEventType.SESSION_IDLE
                 || event.type() == AgentEventType.SESSION_COMPLETED
                 || event.type() == AgentEventType.ERROR) {
             List<AgentEvent> flushed = flushSession(event.sessionId(), sequenceSupplier, timedFlushConsumer);
-            flushed.add(copyWithSeq(event, sequenceSupplier.getAsLong()));
+            flushed.add(copyWithSeq(event, 0));
             return flushed;
         }
-        return List.of(copyWithSeq(event, sequenceSupplier.getAsLong()));
+        return List.of(copyWithSeq(event, 0));
     }
 
     public synchronized List<AgentEvent> flushSession(String sessionId, LongSupplier sequenceSupplier,
@@ -115,7 +115,7 @@ public class DeltaEventAggregator {
     private AgentEvent toDeltaEvent(Buffer buffer, String content) {
         AgentMessagePayload original = (AgentMessagePayload) buffer.seed.payload();
         return new AgentEvent(null, buffer.seed.traceId(), buffer.seed.tenantId(), buffer.seed.userId(),
-                buffer.seed.deviceId(), buffer.seed.projectId(), buffer.seed.sessionId(), buffer.sequenceSupplier.getAsLong(),
+                buffer.seed.deviceId(), buffer.seed.projectId(), buffer.seed.sessionId(), 0,
                 buffer.seed.agentType(), AgentEventType.AGENT_MESSAGE_DELTA, null, null,
                 new AgentMessagePayload(original.messageId(), original.role(), content, true,
                         original.extensions()),

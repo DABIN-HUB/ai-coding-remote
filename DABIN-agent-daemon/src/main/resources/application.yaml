@@ -9,6 +9,11 @@ agent:
     process-io-threads: 4
     event-aggregation-window: 100ms
     event-aggregation-max-chars: 160
+    cloud:
+      control-plane-url: http://127.0.0.1:48080
+      relay-url: ws://127.0.0.1:48180/agent/ws
+      reconnect-initial-delay: 1s
+      reconnect-max-delay: 30s
   codex:
     executable: codex
     startup-timeout: 30s

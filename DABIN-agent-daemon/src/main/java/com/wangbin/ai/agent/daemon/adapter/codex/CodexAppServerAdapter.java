@@ -19,6 +19,7 @@ import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessageKind;
 import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.config.AgentCodexProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
+import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
@@ -50,6 +51,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     private final WorkspaceManager workspaceManager;
     private final CodexEventMapper eventMapper;
     private final DeltaEventAggregator eventAggregator;
+    private final SerializedSessionEventEmitter sessionEventEmitter;
     private final ExecutorService processIoExecutor;
     private final Sinks.Many<AgentEvent> eventSink = Sinks.many().replay().limit(256);
     private final Map<String, CodexSessionContext> platformSessions = new ConcurrentHashMap<>();
@@ -66,6 +68,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
                                  WorkspaceManager workspaceManager,
                                  CodexEventMapper eventMapper,
                                  DeltaEventAggregator eventAggregator,
+                                 SerializedSessionEventEmitter sessionEventEmitter,
                                  @Qualifier("agentProcessIoExecutor") ExecutorService processIoExecutor) {
         this.objectMapper = objectMapper;
         this.codexProperties = codexProperties;
@@ -73,6 +76,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         this.workspaceManager = workspaceManager;
         this.eventMapper = eventMapper;
         this.eventAggregator = eventAggregator;
+        this.sessionEventEmitter = sessionEventEmitter;
         this.processIoExecutor = processIoExecutor;
     }
 
@@ -163,8 +167,10 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     public void closeSession(String sessionId) {
         CodexSessionContext removed = platformSessions.remove(sessionId);
         if (removed != null) {
-            eventAggregator.closeSession(removed.platformSessionId(), removed::nextSeq, this::emitDirect)
-                    .forEach(this::emitDirect);
+            eventAggregator.closeSession(removed.platformSessionId(), removed::nextSeq,
+                            event -> emitSequenced(event, removed))
+                    .forEach(event -> emitSequenced(event, removed));
+            sessionEventEmitter.releaseSession(removed.platformSessionId());
             nativeSessions.remove(removed.nativeSessionId());
             activeTurnIds.remove(sessionId);
         }
@@ -255,10 +261,14 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     private void emit(AgentEvent event, CodexSessionContext context) {
-        Consumer<AgentEvent> directEmitter = this::emitDirect;
+        Consumer<AgentEvent> directEmitter = timed -> emitSequenced(timed, context);
         for (AgentEvent aggregated : eventAggregator.accept(event, context::nextSeq, directEmitter)) {
-            emitDirect(aggregated);
+            emitSequenced(aggregated, context);
         }
+    }
+
+    private void emitSequenced(AgentEvent event, CodexSessionContext context) {
+        sessionEventEmitter.emit(event, context::nextSeq, this::emitDirect);
     }
 
     private void emitDirect(AgentEvent event) {
