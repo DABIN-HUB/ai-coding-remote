@@ -20,7 +20,7 @@ import static com.wangbin.ai.framework.web.config.DABINWebAutoConfiguration.crea
 
 @AutoConfiguration
 @EnableConfigurationProperties(XssProperties.class)
-@ConditionalOnProperty(prefix = "DABIN.xss", name = "enable", havingValue = "true", matchIfMissing = true) // 设置为 false 时，禁用
+@ConditionalOnProperty(prefix = "dabin.xss", name = "enable", havingValue = "true", matchIfMissing = true) // 设置为 false 时，禁用
 public class DABINXssAutoConfiguration implements WebMvcConfigurer {
 
     /**
@@ -41,7 +41,7 @@ public class DABINXssAutoConfiguration implements WebMvcConfigurer {
      */
     @Bean
     @ConditionalOnMissingBean(name = "xssJacksonCustomizer")
-    @ConditionalOnProperty(value = "DABIN.xss.enable", havingValue = "true")
+    @ConditionalOnProperty(value = "dabin.xss.enable", havingValue = "true")
     public Jackson2ObjectMapperBuilderCustomizer xssJacksonCustomizer(XssProperties properties,
                                                                       PathMatcher pathMatcher,
                                                                       XssCleaner xssCleaner) {

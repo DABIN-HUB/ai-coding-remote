@@ -12,7 +12,7 @@ import java.util.Set;
  *
  * @author 芋道源码
  */
-@ConfigurationProperties(prefix = "DABIN.tenant")
+@ConfigurationProperties(prefix = "dabin.tenant")
 @Data
 public class TenantProperties {
 

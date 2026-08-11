@@ -7,7 +7,7 @@ import org.springframework.validation.annotation.Validated;
 import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 
-@ConfigurationProperties(prefix = "DABIN.sms-code")
+@ConfigurationProperties(prefix = "dabin.sms-code")
 @Validated
 @Data
 public class SmsCodeProperties {

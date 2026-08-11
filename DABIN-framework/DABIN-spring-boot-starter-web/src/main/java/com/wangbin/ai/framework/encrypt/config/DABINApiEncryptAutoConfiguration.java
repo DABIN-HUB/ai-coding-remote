@@ -17,7 +17,7 @@ import static com.wangbin.ai.framework.web.config.DABINWebAutoConfiguration.crea
 @AutoConfiguration
 @Slf4j
 @EnableConfigurationProperties(ApiEncryptProperties.class)
-@ConditionalOnProperty(prefix = "DABIN.api-encrypt", name = "enable", havingValue = "true")
+@ConditionalOnProperty(prefix = "dabin.api-encrypt", name = "enable", havingValue = "true")
 public class DABINApiEncryptAutoConfiguration {
 
     @Bean

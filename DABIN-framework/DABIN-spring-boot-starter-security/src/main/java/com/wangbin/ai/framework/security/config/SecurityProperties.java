@@ -9,7 +9,7 @@ import jakarta.validation.constraints.NotNull;
 import java.util.Collections;
 import java.util.List;
 
-@ConfigurationProperties(prefix = "DABIN.security")
+@ConfigurationProperties(prefix = "dabin.security")
 @Validated
 @Data
 public class SecurityProperties {

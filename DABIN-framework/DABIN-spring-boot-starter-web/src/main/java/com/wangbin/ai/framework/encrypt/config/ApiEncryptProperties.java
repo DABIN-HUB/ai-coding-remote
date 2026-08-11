@@ -11,7 +11,7 @@ import org.springframework.validation.annotation.Validated;
  *
  * @author 芋道源码
  */
-@ConfigurationProperties(prefix = "DABIN.api-encrypt")
+@ConfigurationProperties(prefix = "dabin.api-encrypt")
 @Validated
 @Data
 public class ApiEncryptProperties {

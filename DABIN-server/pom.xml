@@ -50,6 +50,13 @@
             <artifactId>DABIN-spring-boot-starter-protection</artifactId>
         </dependency>
 
+        <!-- Test 娴嬭瘯鐩稿叧 -->
+        <dependency>
+            <groupId>com.wangbin.ai</groupId>
+            <artifactId>DABIN-spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>

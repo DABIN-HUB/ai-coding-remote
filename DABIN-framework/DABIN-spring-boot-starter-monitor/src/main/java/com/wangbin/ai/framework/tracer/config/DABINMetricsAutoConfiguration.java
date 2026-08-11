@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Bean;
  */
 @AutoConfiguration
 @ConditionalOnClass({MeterRegistryCustomizer.class})
-@ConditionalOnProperty(prefix = "DABIN.metrics", value = "enable", matchIfMissing = true) // 允许使用 DABIN.metrics.enable=false 禁用 Metrics
+@ConditionalOnProperty(prefix = "dabin.metrics", value = "enable", matchIfMissing = true) // 允许使用 DABIN.metrics.enable=false 禁用 Metrics
 public class DABINMetricsAutoConfiguration {
 
     @Bean

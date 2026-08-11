@@ -130,7 +130,7 @@ public class DABINWebAutoConfiguration {
      * 创建 DemoFilter Bean，演示模式
      */
     @Bean
-    @ConditionalOnProperty(value = "DABIN.demo", havingValue = "true")
+    @ConditionalOnProperty(value = "dabin.demo", havingValue = "true")
     public FilterRegistrationBean<DemoFilter> demoFilter() {
         return createFilterBean(new DemoFilter(), WebFilterOrderEnum.DEMO_FILTER);
     }

@@ -10,7 +10,7 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.util.Collection;
 
-@ConfigurationProperties(prefix = "DABIN.codegen")
+@ConfigurationProperties(prefix = "dabin.codegen")
 @Validated
 @Data
 public class CodegenProperties {

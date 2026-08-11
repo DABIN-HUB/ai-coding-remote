@@ -25,7 +25,7 @@ import org.springframework.context.annotation.Bean;
         "jakarta.servlet.Filter"
 })
 @EnableConfigurationProperties(TracerProperties.class)
-@ConditionalOnProperty(prefix = "DABIN.tracer", value = "enable", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "dabin.tracer", value = "enable", matchIfMissing = true)
 public class DABINTracerAutoConfiguration {
 
     @Value("${spring.application.name:application}")

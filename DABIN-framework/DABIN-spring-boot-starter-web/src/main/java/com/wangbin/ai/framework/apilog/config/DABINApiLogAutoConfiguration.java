@@ -22,7 +22,7 @@ public class DABINApiLogAutoConfiguration implements WebMvcConfigurer {
      * 创建 ApiAccessLogFilter Bean，记录 API 请求日志
      */
     @Bean
-    @ConditionalOnProperty(prefix = "DABIN.access-log", value = "enable", matchIfMissing = true) // 允许使用 DABIN.access-log.enable=false 禁用访问日志
+    @ConditionalOnProperty(prefix = "dabin.access-log", value = "enable", matchIfMissing = true) // 允许使用 DABIN.access-log.enable=false 禁用访问日志
     public FilterRegistrationBean<ApiAccessLogFilter> apiAccessLogFilter(WebProperties webProperties,
                                                                          @Value("${spring.application.name}") String applicationName,
                                                                          ApiAccessLogCommonApi apiAccessLogApi) {

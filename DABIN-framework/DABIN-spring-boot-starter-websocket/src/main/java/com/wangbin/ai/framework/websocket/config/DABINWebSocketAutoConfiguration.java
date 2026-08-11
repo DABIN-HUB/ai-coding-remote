@@ -42,7 +42,7 @@ import java.util.List;
  */
 @AutoConfiguration(before = DABINRedisMQConsumerAutoConfiguration.class) // before DABINRedisMQConsumerAutoConfiguration 的原因是，需要保证 RedisWebSocketMessageConsumer 先创建，才能创建 RedisMessageListenerContainer
 @EnableWebSocket // 开启 websocket
-@ConditionalOnProperty(prefix = "DABIN.websocket", value = "enable", matchIfMissing = true) // 允许使用 DABIN.websocket.enable=false 禁用 websocket
+@ConditionalOnProperty(prefix = "dabin.websocket", value = "enable", matchIfMissing = true) // 允许使用 DABIN.websocket.enable=false 禁用 websocket
 @EnableConfigurationProperties(WebSocketProperties.class)
 public class DABINWebSocketAutoConfiguration {
 
@@ -85,7 +85,7 @@ public class DABINWebSocketAutoConfiguration {
     // ==================== Sender 相关 ====================
 
     @Configuration
-    @ConditionalOnProperty(prefix = "DABIN.websocket", name = "sender-type", havingValue = "local")
+    @ConditionalOnProperty(prefix = "dabin.websocket", name = "sender-type", havingValue = "local")
     public class LocalWebSocketMessageSenderConfiguration {
 
         @Bean
@@ -96,7 +96,7 @@ public class DABINWebSocketAutoConfiguration {
     }
 
     @Configuration
-    @ConditionalOnProperty(prefix = "DABIN.websocket", name = "sender-type", havingValue = "redis")
+    @ConditionalOnProperty(prefix = "dabin.websocket", name = "sender-type", havingValue = "redis")
     public class RedisWebSocketMessageSenderConfiguration {
 
         @Bean
@@ -114,7 +114,7 @@ public class DABINWebSocketAutoConfiguration {
     }
 
     @Configuration
-    @ConditionalOnProperty(prefix = "DABIN.websocket", name = "sender-type", havingValue = "rocketmq")
+    @ConditionalOnProperty(prefix = "dabin.websocket", name = "sender-type", havingValue = "rocketmq")
     public class RocketMQWebSocketMessageSenderConfiguration {
 
         @Bean
@@ -133,7 +133,7 @@ public class DABINWebSocketAutoConfiguration {
     }
 
     @Configuration
-    @ConditionalOnProperty(prefix = "DABIN.websocket", name = "sender-type", havingValue = "rabbitmq")
+    @ConditionalOnProperty(prefix = "dabin.websocket", name = "sender-type", havingValue = "rabbitmq")
     public class RabbitMQWebSocketMessageSenderConfiguration {
 
         @Bean
@@ -162,7 +162,7 @@ public class DABINWebSocketAutoConfiguration {
     }
 
     @Configuration
-    @ConditionalOnProperty(prefix = "DABIN.websocket", name = "sender-type", havingValue = "kafka")
+    @ConditionalOnProperty(prefix = "dabin.websocket", name = "sender-type", havingValue = "kafka")
     public class KafkaWebSocketMessageSenderConfiguration {
 
         @Bean

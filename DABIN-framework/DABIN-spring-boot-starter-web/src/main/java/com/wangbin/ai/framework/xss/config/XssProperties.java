@@ -12,7 +12,7 @@ import java.util.List;
  *
  * @author 芋道源码
  */
-@ConfigurationProperties(prefix = "DABIN.xss")
+@ConfigurationProperties(prefix = "dabin.xss")
 @Validated
 @Data
 public class XssProperties {

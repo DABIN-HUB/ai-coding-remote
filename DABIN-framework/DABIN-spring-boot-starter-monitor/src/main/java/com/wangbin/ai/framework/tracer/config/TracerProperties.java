@@ -8,7 +8,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *
  * @author 麻薯
  */
-@ConfigurationProperties("DABIN.tracer")
+@ConfigurationProperties("dabin.tracer")
 @Data
 public class TracerProperties {
 }

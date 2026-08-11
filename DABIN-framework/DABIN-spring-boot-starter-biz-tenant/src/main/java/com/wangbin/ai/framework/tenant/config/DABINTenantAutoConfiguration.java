@@ -50,7 +50,7 @@ import java.util.*;
 import static com.wangbin.ai.framework.common.util.collection.CollectionUtils.convertList;
 
 @AutoConfiguration
-@ConditionalOnProperty(prefix = "DABIN.tenant", value = "enable", matchIfMissing = true) // 允许使用 DABIN.tenant.enable=false 禁用多租户
+@ConditionalOnProperty(prefix = "dabin.tenant", value = "enable", matchIfMissing = true) // 允许使用 DABIN.tenant.enable=false 禁用多租户
 @EnableConfigurationProperties(TenantProperties.class)
 public class DABINTenantAutoConfiguration {
 

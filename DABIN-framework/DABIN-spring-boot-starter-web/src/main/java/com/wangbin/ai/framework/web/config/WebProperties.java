@@ -11,7 +11,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 
-@ConfigurationProperties(prefix = "DABIN.web")
+@ConfigurationProperties(prefix = "dabin.web")
 @Validated
 @Data
 public class WebProperties {

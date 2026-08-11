@@ -92,6 +92,7 @@ class RelayWebSocketClientTest {
         client.start(credential());
         waitUntil(() -> connector.connectCount.get() == 1);
         Attempt firstAttempt = connector.attempt(0);
+        waitUntilCurrentSocket(client, firstAttempt.socket());
 
         firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
         firstAttempt.listener().onClose(firstAttempt.socket(), ABNORMAL_CLOSE_STATUS, "closed");
@@ -126,8 +127,9 @@ class RelayWebSocketClientTest {
                 controlPlaneClient, scheduler, connector);
 
         client.start(credential());
-        waitUntil(() -> controlPlaneClient.ticketCount.get() >= 2);
+        waitUntil(() -> controlPlaneClient.ticketCount.get() >= 2 && connector.connectCount.get() >= 2);
         Attempt latestAttempt = connector.latestAttempt();
+        waitUntilCurrentSocket(client, latestAttempt.socket());
         String welcome = objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.WELCOME,
                 new WelcomePayload(TEST_CONNECTION_ID, TEST_RELAY_NODE_ID, TEST_HEARTBEAT_INTERVAL, Instant.now())));
 
@@ -151,6 +153,7 @@ class RelayWebSocketClientTest {
         client.start(credential());
         waitUntil(() -> connector.connectCount.get() == 1);
         Attempt firstAttempt = connector.attempt(0);
+        waitUntilCurrentSocket(client, firstAttempt.socket());
         connector.completeConnectImmediately.set(false);
         firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
         waitUntil(() -> connector.connectCount.get() == 2 && controlPlaneClient.ticketCount.get() == 2);
@@ -174,6 +177,7 @@ class RelayWebSocketClientTest {
         client.start(credential());
         waitUntil(() -> connector.connectCount.get() == 1);
         Attempt firstAttempt = connector.attempt(0);
+        waitUntilCurrentSocket(client, firstAttempt.socket());
         firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
         waitUntil(() -> connector.connectCount.get() == 2);
         sendWelcome(connector.latestAttempt(), TEST_CONNECTION_ID_SECOND);
@@ -205,6 +209,7 @@ class RelayWebSocketClientTest {
             waitUntil(() -> captureScheduler.latestAuthTimeout.get() != null);
             Runnable firstAuthTimeout = captureScheduler.latestAuthTimeout.get();
             Attempt firstAttempt = connector.attempt(0);
+            waitUntilCurrentSocket(client, firstAttempt.socket());
             firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
             waitUntil(() -> connector.connectCount.get() == 2);
             sendWelcome(connector.latestAttempt(), TEST_CONNECTION_ID_SECOND);
@@ -233,6 +238,7 @@ class RelayWebSocketClientTest {
         client.start(credential());
         waitUntil(() -> connector.connectCount.get() == 1);
         Attempt firstAttempt = connector.attempt(0);
+        waitUntilCurrentSocket(client, firstAttempt.socket());
         sendWelcome(firstAttempt, TEST_CONNECTION_ID);
         waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
         firstAttempt.socket().failNextCommandAck.set(true);
@@ -296,6 +302,7 @@ class RelayWebSocketClientTest {
             client.start(credential());
             waitUntil(() -> connector.connectCount.get() == 1);
             Attempt firstAttempt = connector.attempt(0);
+            waitUntilCurrentSocket(client, firstAttempt.socket());
             sendWelcome(firstAttempt, TEST_CONNECTION_ID);
             waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
 
@@ -414,6 +421,20 @@ class RelayWebSocketClientTest {
         Field field = RelayWebSocketClient.class.getDeclaredField("connectInFlight");
         field.setAccessible(true);
         return field.getBoolean(client);
+    }
+
+    private void waitUntilCurrentSocket(RelayWebSocketClient client, WebSocket socket) {
+        waitUntil(() -> currentSocket(client) == socket);
+    }
+
+    private WebSocket currentSocket(RelayWebSocketClient client) {
+        try {
+            Field field = RelayWebSocketClient.class.getDeclaredField("webSocket");
+            field.setAccessible(true);
+            return (WebSocket) field.get(client);
+        } catch (ReflectiveOperationException ex) {
+            throw new AssertionError(ex);
+        }
     }
 
     @FunctionalInterface

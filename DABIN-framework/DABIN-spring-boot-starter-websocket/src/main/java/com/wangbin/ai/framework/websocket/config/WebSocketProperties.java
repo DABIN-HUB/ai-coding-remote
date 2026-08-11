@@ -12,7 +12,7 @@ import jakarta.validation.constraints.NotNull;
  *
  * @author xingyu4j
  */
-@ConfigurationProperties("DABIN.websocket")
+@ConfigurationProperties("dabin.websocket")
 @Data
 @Validated
 public class WebSocketProperties {

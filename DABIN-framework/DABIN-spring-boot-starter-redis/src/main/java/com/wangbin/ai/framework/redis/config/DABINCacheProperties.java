@@ -9,7 +9,7 @@ import org.springframework.validation.annotation.Validated;
  *
  * @author Wanwan
  */
-@ConfigurationProperties("DABIN.cache")
+@ConfigurationProperties("dabin.cache")
 @Data
 @Validated
 public class DABINCacheProperties {
