@@ -40,6 +40,8 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
 
     private static final String DEVICE_ID_PREFIX = "dev_";
     private static final String CREDENTIAL_ID_PREFIX = "cred_";
+    private static final int SECRET_BYTE_LENGTH = 32;
+    private static final int SHORT_ID_RANDOM_LENGTH = 22;
 
     private final AgentDeviceMapper deviceMapper;
     private final AgentDeviceCredentialMapper credentialMapper;
@@ -179,7 +181,7 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
     private AgentDeviceDO createDevice(PairingCodePayload payload, AgentDevicePairReqVO reqVO) {
         AgentDeviceDO device = new AgentDeviceDO();
         device.setTenantId(payload.tenantId());
-        device.setDeviceId(DEVICE_ID_PREFIX + randomSecret().substring(0, 22));
+        device.setDeviceId(DEVICE_ID_PREFIX + randomSecret().substring(0, SHORT_ID_RANDOM_LENGTH));
         device.setInstallationId(reqVO.getInstallationId());
         device.setOwnerUserId(payload.userId());
         device.setDeviceStatus(DeviceStatus.ACTIVE.name());
@@ -202,7 +204,7 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
         AgentDeviceCredentialDO credential = new AgentDeviceCredentialDO();
         credential.setTenantId(device.getTenantId());
         credential.setDeviceId(device.getId());
-        credential.setCredentialId(CREDENTIAL_ID_PREFIX + randomSecret().substring(0, 22));
+        credential.setCredentialId(CREDENTIAL_ID_PREFIX + randomSecret().substring(0, SHORT_ID_RANDOM_LENGTH));
         credential.setSecretHash(passwordEncoder.encode(credentialSecret));
         credential.setCredentialStatus(CredentialStatus.ACTIVE.name());
         credential.setCreator(String.valueOf(operatorUserId));
@@ -253,7 +255,7 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
     }
 
     private String randomSecret() {
-        byte[] bytes = new byte[32];
+        byte[] bytes = new byte[SECRET_BYTE_LENGTH];
         secureRandom.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }

@@ -1,11 +1,11 @@
 package com.wangbin.ai.module.agent.controller.admin.device;
 
+import com.wangbin.ai.agent.contract.protocol.AgentHttpHeaders;
 import com.wangbin.ai.framework.common.pojo.CommonResult;
 import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.framework.tenant.core.context.TenantContextHolder;
 import com.wangbin.ai.framework.web.core.util.WebFrameworkUtils;
 import com.wangbin.ai.module.agent.controller.admin.device.vo.*;
-import com.wangbin.ai.module.agent.enums.AgentHttpHeaders;
 import com.wangbin.ai.module.agent.service.device.AgentDeviceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;

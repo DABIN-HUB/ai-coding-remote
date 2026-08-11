@@ -23,30 +23,42 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class InMemoryConnectionManagerTest {
 
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
+    private static final String TEST_DEVICE_ID = "dev-1";
+    private static final String CONNECTION_FIRST = "conn-1";
+    private static final String CONNECTION_SECOND = "conn-2";
+    private static final String CONNECTION_A = "conn-a";
+    private static final String CONNECTION_B = "conn-b";
+    private static final String CONNECTION_PREFIX = "conn-";
+    private static final String TEST_SESSION_ID = "test-session";
+    private static final int REPLACEMENT_START_INDEX = 1;
+    private static final int REPLACEMENT_END_INDEX = 5;
+
     @Test
     void deviceConnectionReplacementClosesOldConnectionAndKeepsNewRoute() {
         InMemoryConnectionManager manager = new InMemoryConnectionManager(new AgentRelayProperties());
         WebSocketSession firstSession = mockSession();
         WebSocketSession secondSession = mockSession();
 
-        manager.register(new ConnectionRegistration(descriptor("conn-1"), firstSession)).block();
-        manager.register(new ConnectionRegistration(descriptor("conn-2"), secondSession)).block();
+        manager.register(new ConnectionRegistration(descriptor(CONNECTION_FIRST), firstSession)).block();
+        manager.register(new ConnectionRegistration(descriptor(CONNECTION_SECOND), secondSession)).block();
 
-        assertThat(manager.findByConnectionId("conn-1")).isEmpty();
-        assertThat(manager.findDeviceConnection("dev-1")).map(context -> context.descriptor().connectionId())
-                .contains("conn-2");
+        assertThat(manager.findByConnectionId(CONNECTION_FIRST)).isEmpty();
+        assertThat(manager.findDeviceConnection(TEST_DEVICE_ID)).map(context -> context.descriptor().connectionId())
+                .contains(CONNECTION_SECOND);
     }
 
     @Test
     void everyConnectionHasIsolatedOutboundQueue() {
         InMemoryConnectionManager manager = new InMemoryConnectionManager(new AgentRelayProperties());
 
-        manager.register(new ConnectionRegistration(descriptor("conn-a"), mockSession())).block();
-        manager.register(new ConnectionRegistration(new ConnectionDescriptor("conn-b", ConnectionRole.USER,
-                1L, 11L, null, Instant.now()), mockSession())).block();
+        manager.register(new ConnectionRegistration(descriptor(CONNECTION_A), mockSession())).block();
+        manager.register(new ConnectionRegistration(new ConnectionDescriptor(CONNECTION_B, ConnectionRole.USER,
+                TEST_TENANT_ID, TEST_USER_ID, null, Instant.now()), mockSession())).block();
 
-        ConnectionContext a = manager.findByConnectionId("conn-a").orElseThrow();
-        ConnectionContext b = manager.findByConnectionId("conn-b").orElseThrow();
+        ConnectionContext a = manager.findByConnectionId(CONNECTION_A).orElseThrow();
+        ConnectionContext b = manager.findByConnectionId(CONNECTION_B).orElseThrow();
         assertThat(a.outboundChannel()).isNotSameAs(b.outboundChannel());
     }
 
@@ -55,18 +67,19 @@ class InMemoryConnectionManagerTest {
     void deviceConnectionReplacementDoesNotLeaveStaleUserRouteIds() throws Exception {
         InMemoryConnectionManager manager = new InMemoryConnectionManager(new AgentRelayProperties());
 
-        for (int i = 1; i <= 5; i++) {
-            manager.register(new ConnectionRegistration(descriptor("conn-" + i), mockSession())).block();
+        for (int i = REPLACEMENT_START_INDEX; i <= REPLACEMENT_END_INDEX; i++) {
+            manager.register(new ConnectionRegistration(descriptor(CONNECTION_PREFIX + i), mockSession())).block();
         }
 
         Field field = InMemoryConnectionManager.class.getDeclaredField("userToConnectionIds");
         field.setAccessible(true);
         Map<Long, Set<String>> userRoutes = (Map<Long, Set<String>>) field.get(manager);
-        assertThat(userRoutes.get(11L)).containsExactly("conn-5");
+        assertThat(userRoutes.get(TEST_USER_ID)).containsExactly(CONNECTION_PREFIX + REPLACEMENT_END_INDEX);
     }
 
     private ConnectionDescriptor descriptor(String connectionId) {
-        return new ConnectionDescriptor(connectionId, ConnectionRole.DEVICE, 1L, 11L, "dev-1", Instant.now());
+        return new ConnectionDescriptor(connectionId, ConnectionRole.DEVICE, TEST_TENANT_ID, TEST_USER_ID,
+                TEST_DEVICE_ID, Instant.now());
     }
 
     private WebSocketSession mockSession() {
@@ -79,7 +92,7 @@ class InMemoryConnectionManagerTest {
 
         @Override
         public String getId() {
-            return "test-session";
+            return TEST_SESSION_ID;
         }
 
         @Override

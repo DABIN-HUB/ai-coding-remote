@@ -18,6 +18,7 @@ public final class AgentCoordinationKeys {
     private static final String USER_ROUTE_PREFIX = "agent:route:user:";
     private static final String RELAY_NODE_PREFIX = "agent:relay:node:";
     private static final String PAIRING_LOCK_PREFIX = "agent:lock:pair:";
+    private static final String SHA_256_ALGORITHM = "SHA-256";
 
     private AgentCoordinationKeys() {
     }
@@ -52,7 +53,7 @@ public final class AgentCoordinationKeys {
 
     private static String sha256UrlSafe(String value) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            MessageDigest digest = MessageDigest.getInstance(SHA_256_ALGORITHM);
             byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
             return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         } catch (NoSuchAlgorithmException ex) {

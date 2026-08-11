@@ -47,6 +47,24 @@ import static org.mockito.Mockito.when;
 
 class AgentDeviceServiceImplTest {
 
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
+    private static final Long TEST_DEVICE_DB_ID = 100L;
+    private static final Long TEST_CREDENTIAL_DB_ID = 200L;
+    private static final String PAIRING_CODE = "ABCD-EFGH";
+    private static final String PAIRING_CODE_FIRST = "AAAA-BBBB";
+    private static final String PAIRING_CODE_SECOND = "CCCC-DDDD";
+    private static final String TEST_INSTALLATION_ID = "install-1";
+    private static final String EXISTING_DEVICE_ID = "dev_existing";
+    private static final String DEVICE_ID_PREFIX = "dev_";
+    private static final String CREDENTIAL_ID_PREFIX = "cred_";
+    private static final String TEST_CREDENTIAL_ID = "cred-1";
+    private static final String TEST_CREDENTIAL_SECRET = "secret";
+    private static final String TEST_CREDENTIAL_HASH = "hash";
+    private static final String TEST_RELAY_TICKET = "ticket-1";
+    private static final long PAIRING_TTL_SECONDS = 300L;
+    private static final long RELAY_TICKET_TTL_SECONDS = 60L;
+
     private final AgentDeviceMapper deviceMapper = mock(AgentDeviceMapper.class);
     private final AgentDeviceCredentialMapper credentialMapper = mock(AgentDeviceCredentialMapper.class);
     private final PairingCodeService pairingCodeService = mock(PairingCodeService.class);
@@ -56,7 +74,7 @@ class AgentDeviceServiceImplTest {
     private final RedissonClient redissonClient = mock(RedissonClient.class);
     private final RLock lock = mock(RLock.class);
     private final AgentControlPlaneProperties properties = new AgentControlPlaneProperties();
-    private final List<String> events = Collections.synchronizedList(new ArrayList<>());
+    private final List<TransactionTestEvent> events = Collections.synchronizedList(new ArrayList<>());
     private AgentDeviceServiceImpl service;
 
     @BeforeEach
@@ -67,31 +85,31 @@ class AgentDeviceServiceImplTest {
         when(passwordEncoder.encode(any())).thenReturn("encoded-secret");
         when(redissonClient.getLock(any(String.class))).thenReturn(lock);
         when(lock.tryLock(anyLong(), any(TimeUnit.class))).thenAnswer(invocation -> {
-            events.add("LOCK_ACQUIRED");
+            events.add(TransactionTestEvent.LOCK_ACQUIRED);
             return true;
         });
         when(lock.isHeldByCurrentThread()).thenReturn(true);
         org.mockito.Mockito.doAnswer(invocation -> {
-            events.add("LOCK_RELEASE");
+            events.add(TransactionTestEvent.LOCK_RELEASE);
             return null;
         }).when(lock).unlock();
     }
 
     @Test
     void pairCreatesDeviceAndCredentialFromServerSidePairingPayload() {
-        when(pairingCodeService.consumePairingCode("ABCD-EFGH")).thenReturn(pairingPayload());
-        when(deviceMapper.selectListByInstallation(11L, "install-1")).thenReturn(List.of());
+        when(pairingCodeService.consumePairingCode(PAIRING_CODE)).thenReturn(pairingPayload());
+        when(deviceMapper.selectListByInstallation(TEST_USER_ID, TEST_INSTALLATION_ID)).thenReturn(List.of());
         org.mockito.Mockito.doAnswer(invocation -> {
             AgentDeviceDO device = invocation.getArgument(0);
-            device.setId(100L);
+            device.setId(TEST_DEVICE_DB_ID);
             return 1;
         }).when(deviceMapper).insert(any(AgentDeviceDO.class));
 
         AgentDevicePairRespVO response = service.pairDevice(pairReq());
 
-        assertThat(response.getTenantId()).isEqualTo(1L);
-        assertThat(response.getDeviceId()).startsWith("dev_");
-        assertThat(response.getCredentialId()).startsWith("cred_");
+        assertThat(response.getTenantId()).isEqualTo(TEST_TENANT_ID);
+        assertThat(response.getDeviceId()).startsWith(DEVICE_ID_PREFIX);
+        assertThat(response.getCredentialId()).startsWith(CREDENTIAL_ID_PREFIX);
         assertThat(response.getCredentialSecret()).isNotBlank();
         verify(credentialMapper).insert(any(AgentDeviceCredentialDO.class));
         verify(lock).unlock();
@@ -99,50 +117,53 @@ class AgentDeviceServiceImplTest {
 
     @Test
     void pairLockCoversTransactionCommitBeforeUnlock() {
-        when(pairingCodeService.consumePairingCode("ABCD-EFGH")).thenReturn(pairingPayload());
-        when(deviceMapper.selectListByInstallation(11L, "install-1")).thenReturn(List.of());
+        when(pairingCodeService.consumePairingCode(PAIRING_CODE)).thenReturn(pairingPayload());
+        when(deviceMapper.selectListByInstallation(TEST_USER_ID, TEST_INSTALLATION_ID)).thenReturn(List.of());
         org.mockito.Mockito.doAnswer(invocation -> {
-            events.add("DB_OPERATION");
+            events.add(TransactionTestEvent.DB_OPERATION);
             AgentDeviceDO device = invocation.getArgument(0);
-            device.setId(100L);
+            device.setId(TEST_DEVICE_DB_ID);
             return 1;
         }).when(deviceMapper).insert(any(AgentDeviceDO.class));
 
         service.pairDevice(pairReq());
 
-        assertThat(events).containsSubsequence("LOCK_ACQUIRED", "TX_BEGIN", "DB_OPERATION",
-                "TX_COMMIT", "LOCK_RELEASE");
+        assertThat(events).containsSubsequence(TransactionTestEvent.LOCK_ACQUIRED, TransactionTestEvent.TX_BEGIN,
+                TransactionTestEvent.DB_OPERATION, TransactionTestEvent.TX_COMMIT,
+                TransactionTestEvent.LOCK_RELEASE);
     }
 
     @Test
     void pairRollsBackBeforeUnlockWhenDatabaseOperationFails() {
-        when(pairingCodeService.consumePairingCode("ABCD-EFGH")).thenReturn(pairingPayload());
-        when(deviceMapper.selectListByInstallation(11L, "install-1")).thenReturn(List.of());
+        when(pairingCodeService.consumePairingCode(PAIRING_CODE)).thenReturn(pairingPayload());
+        when(deviceMapper.selectListByInstallation(TEST_USER_ID, TEST_INSTALLATION_ID)).thenReturn(List.of());
         org.mockito.Mockito.doAnswer(invocation -> {
-            events.add("DB_OPERATION");
+            events.add(TransactionTestEvent.DB_OPERATION);
             throw new IllegalStateException("insert failed");
         }).when(deviceMapper).insert(any(AgentDeviceDO.class));
 
         assertThatThrownBy(() -> service.pairDevice(pairReq()))
                 .isInstanceOf(IllegalStateException.class);
 
-        assertThat(events).containsSubsequence("LOCK_ACQUIRED", "TX_BEGIN", "DB_OPERATION",
-                "TX_ROLLBACK", "LOCK_RELEASE");
+        assertThat(events).containsSubsequence(TransactionTestEvent.LOCK_ACQUIRED, TransactionTestEvent.TX_BEGIN,
+                TransactionTestEvent.DB_OPERATION, TransactionTestEvent.TX_ROLLBACK,
+                TransactionTestEvent.LOCK_RELEASE);
     }
 
     @Test
     void repeatedPairReusesDeviceAndRevokesOldActiveCredential() {
-        when(pairingCodeService.consumePairingCode("ABCD-EFGH")).thenReturn(pairingPayload());
+        when(pairingCodeService.consumePairingCode(PAIRING_CODE)).thenReturn(pairingPayload());
         AgentDeviceDO existing = existingDevice();
         AgentDeviceCredentialDO oldCredential = new AgentDeviceCredentialDO();
-        oldCredential.setId(200L);
+        oldCredential.setId(TEST_CREDENTIAL_DB_ID);
         oldCredential.setCredentialStatus(CredentialStatus.ACTIVE.name());
-        when(deviceMapper.selectListByInstallation(11L, "install-1")).thenReturn(List.of(existing));
-        when(credentialMapper.selectActiveListByDeviceId(100L)).thenReturn(new ArrayList<>(List.of(oldCredential)));
+        when(deviceMapper.selectListByInstallation(TEST_USER_ID, TEST_INSTALLATION_ID)).thenReturn(List.of(existing));
+        when(credentialMapper.selectActiveListByDeviceId(TEST_DEVICE_DB_ID))
+                .thenReturn(new ArrayList<>(List.of(oldCredential)));
 
         AgentDevicePairRespVO response = service.pairDevice(pairReq());
 
-        assertThat(response.getDeviceId()).isEqualTo("dev_existing");
+        assertThat(response.getDeviceId()).isEqualTo(EXISTING_DEVICE_ID);
         assertThat(oldCredential.getCredentialStatus()).isEqualTo(CredentialStatus.REVOKED.name());
         assertThat(oldCredential.getRevokedTime()).isNotNull();
         verify(deviceMapper).updateById(existing);
@@ -154,17 +175,17 @@ class AgentDeviceServiceImplTest {
     void concurrentPairWithSameInstallationCreatesOnlyOneDevice() throws Exception {
         when(pairingCodeService.consumePairingCode(any())).thenReturn(pairingPayload());
         AtomicReference<AgentDeviceDO> storedDevice = new AtomicReference<>();
-        when(deviceMapper.selectListByInstallation(11L, "install-1")).thenAnswer(invocation -> {
+        when(deviceMapper.selectListByInstallation(TEST_USER_ID, TEST_INSTALLATION_ID)).thenAnswer(invocation -> {
             AgentDeviceDO device = storedDevice.get();
             return device == null ? List.of() : List.of(device);
         });
         org.mockito.Mockito.doAnswer(invocation -> {
             AgentDeviceDO device = invocation.getArgument(0);
-            device.setId(100L);
+            device.setId(TEST_DEVICE_DB_ID);
             storedDevice.set(device);
             return 1;
         }).when(deviceMapper).insert(any(AgentDeviceDO.class));
-        when(credentialMapper.selectActiveListByDeviceId(100L)).thenReturn(new ArrayList<>());
+        when(credentialMapper.selectActiveListByDeviceId(TEST_DEVICE_DB_ID)).thenReturn(new ArrayList<>());
         ReentrantLock javaLock = new ReentrantLock();
         when(lock.tryLock(anyLong(), any(TimeUnit.class))).thenAnswer(invocation ->
                 javaLock.tryLock((Long) invocation.getArgument(0), (TimeUnit) invocation.getArgument(1)));
@@ -191,10 +212,12 @@ class AgentDeviceServiceImplTest {
 
     @Test
     void concurrentPairSeesFirstDeviceOnlyAfterCommitAndReusesIt() throws Exception {
-        AgentDevicePairReqVO firstReq = pairReq("AAAA-BBBB");
-        AgentDevicePairReqVO secondReq = pairReq("CCCC-DDDD");
-        when(pairingCodeService.consumePairingCode("AAAA-BBBB")).thenReturn(pairingPayload("AAAA-BBBB"));
-        when(pairingCodeService.consumePairingCode("CCCC-DDDD")).thenReturn(pairingPayload("CCCC-DDDD"));
+        AgentDevicePairReqVO firstReq = pairReq(PAIRING_CODE_FIRST);
+        AgentDevicePairReqVO secondReq = pairReq(PAIRING_CODE_SECOND);
+        when(pairingCodeService.consumePairingCode(PAIRING_CODE_FIRST))
+                .thenReturn(pairingPayload(PAIRING_CODE_FIRST));
+        when(pairingCodeService.consumePairingCode(PAIRING_CODE_SECOND))
+                .thenReturn(pairingPayload(PAIRING_CODE_SECOND));
         AtomicReference<AgentDeviceDO> committedDevice = new AtomicReference<>();
         ThreadLocal<AgentDeviceDO> pendingDevice = new ThreadLocal<>();
         List<AgentDeviceCredentialDO> credentials = Collections.synchronizedList(new ArrayList<>());
@@ -207,17 +230,17 @@ class AgentDeviceServiceImplTest {
                     }
                     pendingDevice.remove();
                 }, pendingDevice::remove));
-        when(deviceMapper.selectListByInstallation(11L, "install-1")).thenAnswer(invocation -> {
+        when(deviceMapper.selectListByInstallation(TEST_USER_ID, TEST_INSTALLATION_ID)).thenAnswer(invocation -> {
             AgentDeviceDO device = committedDevice.get();
             return device == null ? List.of() : List.of(device);
         });
         org.mockito.Mockito.doAnswer(invocation -> {
             AgentDeviceDO device = invocation.getArgument(0);
-            device.setId(100L);
+            device.setId(TEST_DEVICE_DB_ID);
             pendingDevice.set(device);
             return 1;
         }).when(deviceMapper).insert(any(AgentDeviceDO.class));
-        when(credentialMapper.selectActiveListByDeviceId(100L)).thenAnswer(invocation ->
+        when(credentialMapper.selectActiveListByDeviceId(TEST_DEVICE_DB_ID)).thenAnswer(invocation ->
                 credentials.stream()
                         .filter(credential -> CredentialStatus.ACTIVE.name().equals(credential.getCredentialStatus()))
                         .toList());
@@ -256,40 +279,43 @@ class AgentDeviceServiceImplTest {
     @Test
     void createRelayTicketAuthenticatesCredentialAndDoesNotTrustClientDeviceId() {
         AgentDeviceCredentialDO credential = new AgentDeviceCredentialDO();
-        credential.setId(200L);
-        credential.setDeviceId(100L);
+        credential.setId(TEST_CREDENTIAL_DB_ID);
+        credential.setDeviceId(TEST_DEVICE_DB_ID);
         credential.setCredentialStatus(CredentialStatus.ACTIVE.name());
-        credential.setSecretHash("hash");
-        when(credentialMapper.selectByCredentialId("cred-1")).thenReturn(credential);
-        when(passwordEncoder.matches("secret", "hash")).thenReturn(true);
-        when(deviceMapper.selectById(100L)).thenReturn(existingDevice());
-        RelayTicketPayload ticket = new RelayTicketPayload("ticket-1", RelaySubjectType.DEVICE, 1L,
-                11L, "dev_existing", Instant.now(), Instant.now().plusSeconds(60));
-        when(relayTicketService.createDeviceTicket(1L, 11L, "dev_existing")).thenReturn(ticket);
+        credential.setSecretHash(TEST_CREDENTIAL_HASH);
+        when(credentialMapper.selectByCredentialId(TEST_CREDENTIAL_ID)).thenReturn(credential);
+        when(passwordEncoder.matches(TEST_CREDENTIAL_SECRET, TEST_CREDENTIAL_HASH)).thenReturn(true);
+        when(deviceMapper.selectById(TEST_DEVICE_DB_ID)).thenReturn(existingDevice());
+        RelayTicketPayload ticket = new RelayTicketPayload(TEST_RELAY_TICKET, RelaySubjectType.DEVICE, TEST_TENANT_ID,
+                TEST_USER_ID, EXISTING_DEVICE_ID, Instant.now(), Instant.now().plusSeconds(RELAY_TICKET_TTL_SECONDS));
+        when(relayTicketService.createDeviceTicket(TEST_TENANT_ID, TEST_USER_ID, EXISTING_DEVICE_ID))
+                .thenReturn(ticket);
 
-        var response = service.createDeviceRelayTicket(1L, "cred-1", "secret");
+        var response = service.createDeviceRelayTicket(TEST_TENANT_ID, TEST_CREDENTIAL_ID, TEST_CREDENTIAL_SECRET);
 
-        assertThat(response.getTicket()).isEqualTo("ticket-1");
+        assertThat(response.getTicket()).isEqualTo(TEST_RELAY_TICKET);
         assertThat(credential.getLastUsedTime()).isBeforeOrEqualTo(LocalDateTime.now());
         verify(credentialMapper).updateById(credential);
     }
 
     private PairingCodePayload pairingPayload() {
-        return new PairingCodePayload("ABCD-EFGH", 1L, 11L, Instant.now(), Instant.now().plusSeconds(300));
+        return new PairingCodePayload(PAIRING_CODE, TEST_TENANT_ID, TEST_USER_ID, Instant.now(),
+                Instant.now().plusSeconds(PAIRING_TTL_SECONDS));
     }
 
     private PairingCodePayload pairingPayload(String pairingCode) {
-        return new PairingCodePayload(pairingCode, 1L, 11L, Instant.now(), Instant.now().plusSeconds(300));
+        return new PairingCodePayload(pairingCode, TEST_TENANT_ID, TEST_USER_ID, Instant.now(),
+                Instant.now().plusSeconds(PAIRING_TTL_SECONDS));
     }
 
     private AgentDevicePairReqVO pairReq() {
-        return pairReq("ABCD-EFGH");
+        return pairReq(PAIRING_CODE);
     }
 
     private AgentDevicePairReqVO pairReq(String pairingCode) {
         AgentDevicePairReqVO reqVO = new AgentDevicePairReqVO();
         reqVO.setPairingCode(pairingCode);
-        reqVO.setInstallationId("install-1");
+        reqVO.setInstallationId(TEST_INSTALLATION_ID);
         reqVO.setDeviceName("dev box");
         reqVO.setHostname("host");
         reqVO.setOsName("Windows");
@@ -301,28 +327,38 @@ class AgentDeviceServiceImplTest {
 
     private AgentDeviceDO existingDevice() {
         AgentDeviceDO device = new AgentDeviceDO();
-        device.setId(100L);
-        device.setTenantId(1L);
-        device.setDeviceId("dev_existing");
-        device.setInstallationId("install-1");
-        device.setOwnerUserId(11L);
+        device.setId(TEST_DEVICE_DB_ID);
+        device.setTenantId(TEST_TENANT_ID);
+        device.setDeviceId(EXISTING_DEVICE_ID);
+        device.setInstallationId(TEST_INSTALLATION_ID);
+        device.setOwnerUserId(TEST_USER_ID);
         device.setDeviceStatus(DeviceStatus.ACTIVE.name());
         return device;
     }
 
+    private enum TransactionTestEvent {
+        LOCK_ACQUIRED,
+        TX_BEGIN,
+        DB_OPERATION,
+        TX_COMMIT,
+        TX_ROLLBACK,
+        LOCK_RELEASE
+    }
+
     private static final class RecordingTransactionTemplate extends TransactionTemplate {
 
-        private final List<String> events;
+        private final List<TransactionTestEvent> events;
         private final Runnable afterCommit;
         private final Runnable afterRollback;
 
-        private RecordingTransactionTemplate(List<String> events) {
+        private RecordingTransactionTemplate(List<TransactionTestEvent> events) {
             this(events, () -> {
             }, () -> {
             });
         }
 
-        private RecordingTransactionTemplate(List<String> events, Runnable afterCommit, Runnable afterRollback) {
+        private RecordingTransactionTemplate(List<TransactionTestEvent> events, Runnable afterCommit,
+                                             Runnable afterRollback) {
             this.events = events;
             this.afterCommit = afterCommit;
             this.afterRollback = afterRollback;
@@ -330,14 +366,14 @@ class AgentDeviceServiceImplTest {
 
         @Override
         public <T> T execute(TransactionCallback<T> action) throws TransactionException {
-            events.add("TX_BEGIN");
+            events.add(TransactionTestEvent.TX_BEGIN);
             try {
                 T result = action.doInTransaction(new SimpleTransactionStatus());
-                events.add("TX_COMMIT");
+                events.add(TransactionTestEvent.TX_COMMIT);
                 afterCommit.run();
                 return result;
             } catch (RuntimeException | Error ex) {
-                events.add("TX_ROLLBACK");
+                events.add(TransactionTestEvent.TX_ROLLBACK);
                 afterRollback.run();
                 throw ex;
             }

@@ -29,37 +29,49 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RelayOutboundQueueTest {
 
+    private static final int SINGLE_MESSAGE_CAPACITY = 1;
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
+    private static final String CONNECTION_A = "connection-a";
+    private static final String CONNECTION_B = "connection-b";
+    private static final String DEVICE_ID = "device-1";
+    private static final String PROJECT_ID = "project-1";
+    private static final String SESSION_ID = "session-1";
+    private static final String TRACE_ID = "trace-1";
+    private static final String ERROR_CODE = "protocol_error";
+    private static final int EVENT_SEQUENCE = 1;
+
     private final ObjectMapper objectMapper = JsonMapper.builder()
             .addModule(new JavaTimeModule())
             .build();
 
     @Test
     void createsIndependentOutboundQueuePerConnection() {
-        InMemoryConnectionManager manager = connectionManager(1);
-        manager.register(registration("connection-a", 11L)).block(Duration.ofSeconds(1));
-        manager.register(registration("connection-b", 11L)).block(Duration.ofSeconds(1));
+        InMemoryConnectionManager manager = connectionManager(SINGLE_MESSAGE_CAPACITY);
+        manager.register(registration(CONNECTION_A, TEST_USER_ID)).block(Duration.ofSeconds(1));
+        manager.register(registration(CONNECTION_B, TEST_USER_ID)).block(Duration.ofSeconds(1));
 
-        var connectionA = manager.findByConnectionId("connection-a").orElseThrow();
-        var connectionB = manager.findByConnectionId("connection-b").orElseThrow();
-        assertThat(connectionA.enqueue(new OutboundMessage("connection-a", EventPriority.NORMAL, "a-only", null)))
+        var connectionA = manager.findByConnectionId(CONNECTION_A).orElseThrow();
+        var connectionB = manager.findByConnectionId(CONNECTION_B).orElseThrow();
+        assertThat(connectionA.enqueue(new OutboundMessage(CONNECTION_A, EventPriority.NORMAL, "a-only", null)))
                 .isTrue();
 
         assertThat(connectionA.outboundChannel()).isNotSameAs(connectionB.outboundChannel());
-        assertThat(connectionA.enqueue(new OutboundMessage("connection-a", EventPriority.NORMAL, "a-full", null)))
+        assertThat(connectionA.enqueue(new OutboundMessage(CONNECTION_A, EventPriority.NORMAL, "a-full", null)))
                 .isFalse();
-        assertThat(connectionB.enqueue(new OutboundMessage("connection-b", EventPriority.NORMAL, "b-only", null)))
+        assertThat(connectionB.enqueue(new OutboundMessage(CONNECTION_B, EventPriority.NORMAL, "b-only", null)))
                 .isTrue();
     }
 
     @Test
     void dispatcherFailsExplicitlyWhenCriticalEventCannotBeQueued() {
-        InMemoryConnectionManager manager = connectionManager(1);
-        manager.register(registration("connection-a", 11L)).block(Duration.ofSeconds(1));
-        var connection = manager.findByConnectionId("connection-a").orElseThrow();
-        connection.enqueue(new OutboundMessage("connection-a", EventPriority.CRITICAL, "already-full", null));
+        InMemoryConnectionManager manager = connectionManager(SINGLE_MESSAGE_CAPACITY);
+        manager.register(registration(CONNECTION_A, TEST_USER_ID)).block(Duration.ofSeconds(1));
+        var connection = manager.findByConnectionId(CONNECTION_A).orElseThrow();
+        connection.enqueue(new OutboundMessage(CONNECTION_A, EventPriority.CRITICAL, "already-full", null));
         WebSocketEventDispatcher dispatcher = new WebSocketEventDispatcher(manager, objectMapper);
 
-        assertThatThrownBy(() -> dispatcher.dispatchToUser(11L, criticalEvent()).block(Duration.ofSeconds(1)))
+        assertThatThrownBy(() -> dispatcher.dispatchToUser(TEST_USER_ID, criticalEvent()).block(Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("critical outbound message rejected");
     }
@@ -72,7 +84,7 @@ class RelayOutboundQueueTest {
 
     private ConnectionRegistration registration(String connectionId, Long userId) {
         return new ConnectionRegistration(new ConnectionDescriptor(connectionId, ConnectionRole.BROWSER,
-                1L, userId, null, Instant.now()), fakeSession(connectionId));
+                TEST_TENANT_ID, userId, null, Instant.now()), fakeSession(connectionId));
     }
 
     private WebSocketSession fakeSession(String connectionId) {
@@ -99,9 +111,9 @@ class RelayOutboundQueueTest {
     }
 
     private AgentEvent criticalEvent() {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
-                "session-1", 1, AgentType.CODEX, AgentEventType.ERROR, null, null,
-                new AgentErrorPayload("protocol_error", "critical event", false, Map.of()), Map.of());
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
+                SESSION_ID, EVENT_SEQUENCE, AgentType.CODEX, AgentEventType.ERROR, null, null,
+                new AgentErrorPayload(ERROR_CODE, "critical event", false, Map.of()), Map.of());
     }
 
 }

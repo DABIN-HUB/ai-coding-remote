@@ -15,9 +15,9 @@ import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.net.http.WebSocket;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,6 +36,26 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RelayWebSocketClientTest {
+
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final String TEST_DEVICE_ID = "dev-1";
+    private static final String TEST_CREDENTIAL_ID = "cred-1";
+    private static final String TEST_CREDENTIAL_SECRET = "secret";
+    private static final String TEST_RELAY_URL = "ws://127.0.0.1:48180/agent/ws";
+    private static final String TEST_RELAY_NODE_ID = "relay-1";
+    private static final String TEST_CONNECTION_ID = "conn-1";
+    private static final String TEST_CONNECTION_ID_SECOND = "conn-2";
+    private static final String TEST_RELAY_TICKET_PREFIX = "ticket-";
+    private static final String NETWORK_FAILURE_MESSAGE = "network";
+    private static final long TEST_RELAY_TICKET_TTL_SECONDS = 60L;
+    private static final Duration TEST_RECONNECT_DELAY = Duration.ofMillis(20);
+    private static final Duration TEST_WELCOME_TIMEOUT = Duration.ofMillis(30);
+    private static final Duration SLOW_WELCOME_TIMEOUT = Duration.ofMillis(120);
+    private static final Duration CAPTURED_WELCOME_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration TEST_HEARTBEAT_INTERVAL = Duration.ofSeconds(20);
+    private static final long WAIT_TIMEOUT_SECONDS = 2L;
+    private static final Duration WAIT_POLL_INTERVAL = Duration.ofMillis(10);
+    private static final int ABNORMAL_CLOSE_STATUS = 1006;
 
     private final ObjectMapper objectMapper = JsonMapper.builder().addModule(new JavaTimeModule()).build();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -57,8 +77,8 @@ class RelayWebSocketClientTest {
         waitUntil(() -> connector.connectCount.get() == 1);
         Attempt firstAttempt = connector.attempt(0);
 
-        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
-        firstAttempt.listener().onClose(firstAttempt.socket(), 1006, "closed");
+        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
+        firstAttempt.listener().onClose(firstAttempt.socket(), ABNORMAL_CLOSE_STATUS, "closed");
 
         waitUntil(() -> connector.connectCount.get() == 2);
         assertThat(controlPlaneClient.ticketCount.get()).isEqualTo(2);
@@ -83,7 +103,7 @@ class RelayWebSocketClientTest {
     @Test
     void welcomeTimeoutReconnectsAndWelcomeCancelsAuthTimeout() throws Exception {
         AgentDaemonProperties properties = properties();
-        properties.getCloud().setWelcomeTimeout(Duration.ofMillis(120));
+        properties.getCloud().setWelcomeTimeout(SLOW_WELCOME_TIMEOUT);
         FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
         FakeConnector connector = new FakeConnector(false);
         RelayWebSocketClient client = new RelayWebSocketClient(objectMapper, properties,
@@ -93,7 +113,7 @@ class RelayWebSocketClientTest {
         waitUntil(() -> controlPlaneClient.ticketCount.get() >= 2);
         Attempt latestAttempt = connector.latestAttempt();
         String welcome = objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.WELCOME,
-                new WelcomePayload("conn-1", "relay-1", Duration.ofSeconds(20), Instant.now())));
+                new WelcomePayload(TEST_CONNECTION_ID, TEST_RELAY_NODE_ID, TEST_HEARTBEAT_INTERVAL, Instant.now())));
 
         latestAttempt.listener().onText(latestAttempt.socket(), welcome, true);
         waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
@@ -116,10 +136,10 @@ class RelayWebSocketClientTest {
         waitUntil(() -> connector.connectCount.get() == 1);
         Attempt firstAttempt = connector.attempt(0);
         connector.completeConnectImmediately.set(false);
-        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
+        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
         waitUntil(() -> connector.connectCount.get() == 2 && controlPlaneClient.ticketCount.get() == 2);
 
-        firstAttempt.listener().onClose(firstAttempt.socket(), 1006, "late close");
+        firstAttempt.listener().onClose(firstAttempt.socket(), ABNORMAL_CLOSE_STATUS, "late close");
         sleep(properties.getCloud().getReconnectInitialDelay().multipliedBy(3));
 
         assertThat(connector.connectCount.get()).isEqualTo(2);
@@ -138,15 +158,15 @@ class RelayWebSocketClientTest {
         client.start(credential());
         waitUntil(() -> connector.connectCount.get() == 1);
         Attempt firstAttempt = connector.attempt(0);
-        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
+        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
         waitUntil(() -> connector.connectCount.get() == 2);
-        sendWelcome(connector.latestAttempt(), "conn-2");
+        sendWelcome(connector.latestAttempt(), TEST_CONNECTION_ID_SECOND);
         waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
         int ticketCountAfterConnected = controlPlaneClient.ticketCount.get();
 
         sendWelcome(firstAttempt, "stale");
         firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("stale error"));
-        firstAttempt.listener().onClose(firstAttempt.socket(), 1006, "stale close");
+        firstAttempt.listener().onClose(firstAttempt.socket(), ABNORMAL_CLOSE_STATUS, "stale close");
         sleep(properties.getCloud().getReconnectInitialDelay().multipliedBy(3));
 
         assertThat(client.state()).isEqualTo(RelayConnectionState.CONNECTED);
@@ -157,7 +177,7 @@ class RelayWebSocketClientTest {
     @Test
     void staleWelcomeTimeoutDoesNotDisconnectNewConnectedAttempt() throws Exception {
         AgentDaemonProperties properties = properties();
-        properties.getCloud().setWelcomeTimeout(Duration.ofSeconds(5));
+        properties.getCloud().setWelcomeTimeout(CAPTURED_WELCOME_TIMEOUT);
         CaptureScheduledExecutor captureScheduler = new CaptureScheduledExecutor(properties.getCloud().getWelcomeTimeout());
         FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
         FakeConnector connector = new FakeConnector(false);
@@ -168,9 +188,9 @@ class RelayWebSocketClientTest {
             waitUntil(() -> connector.connectCount.get() == 1);
             Runnable firstAuthTimeout = captureScheduler.latestAuthTimeout.get();
             Attempt firstAttempt = connector.attempt(0);
-            firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
+            firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException(NETWORK_FAILURE_MESSAGE));
             waitUntil(() -> connector.connectCount.get() == 2);
-            sendWelcome(connector.latestAttempt(), "conn-2");
+            sendWelcome(connector.latestAttempt(), TEST_CONNECTION_ID_SECOND);
             waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
             int ticketCountAfterConnected = controlPlaneClient.ticketCount.get();
 
@@ -187,29 +207,29 @@ class RelayWebSocketClientTest {
 
     private AgentDaemonProperties properties() {
         AgentDaemonProperties properties = new AgentDaemonProperties();
-        properties.getCloud().setReconnectInitialDelay(Duration.ofMillis(20));
-        properties.getCloud().setReconnectMaxDelay(Duration.ofMillis(20));
-        properties.getCloud().setWelcomeTimeout(Duration.ofMillis(30));
+        properties.getCloud().setReconnectInitialDelay(TEST_RECONNECT_DELAY);
+        properties.getCloud().setReconnectMaxDelay(TEST_RECONNECT_DELAY);
+        properties.getCloud().setWelcomeTimeout(TEST_WELCOME_TIMEOUT);
         return properties;
     }
 
     private DeviceCredentialState credential() {
         DeviceCredentialState credential = new DeviceCredentialState();
-        credential.setTenantId(1L);
-        credential.setDeviceId("dev-1");
-        credential.setCredentialId("cred-1");
-        credential.setCredentialSecret("secret");
-        credential.setRelayUrl("ws://127.0.0.1:48180/agent/ws");
+        credential.setTenantId(TEST_TENANT_ID);
+        credential.setDeviceId(TEST_DEVICE_ID);
+        credential.setCredentialId(TEST_CREDENTIAL_ID);
+        credential.setCredentialSecret(TEST_CREDENTIAL_SECRET);
+        credential.setRelayUrl(TEST_RELAY_URL);
         return credential;
     }
 
     private void waitUntil(BooleanCondition condition) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_TIMEOUT_SECONDS);
         while (System.nanoTime() < deadline) {
             if (condition.matches()) {
                 return;
             }
-            sleep(Duration.ofMillis(10));
+            sleep(WAIT_POLL_INTERVAL);
         }
         throw new AssertionError("condition was not satisfied before timeout");
     }
@@ -225,7 +245,7 @@ class RelayWebSocketClientTest {
 
     private void sendWelcome(Attempt attempt, String connectionId) throws Exception {
         String welcome = objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.WELCOME,
-                new WelcomePayload(connectionId, "relay-1", Duration.ofSeconds(20), Instant.now())));
+                new WelcomePayload(connectionId, TEST_RELAY_NODE_ID, TEST_HEARTBEAT_INTERVAL, Instant.now())));
         attempt.listener().onText(attempt.socket(), welcome, true);
     }
 
@@ -254,7 +274,8 @@ class RelayWebSocketClientTest {
         @Override
         public RelayTicketResponse createDeviceRelayTicket(DeviceCredentialState credential) {
             int count = ticketCount.incrementAndGet();
-            return new RelayTicketResponse("ticket-" + count, Instant.now().plusSeconds(60));
+            return new RelayTicketResponse(TEST_RELAY_TICKET_PREFIX + count,
+                    Instant.now().plusSeconds(TEST_RELAY_TICKET_TTL_SECONDS));
         }
     }
 

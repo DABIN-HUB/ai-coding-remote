@@ -16,16 +16,23 @@ import java.util.UUID;
 @Component
 public class DaemonStateStore {
 
+    private static final String USER_HOME_PROPERTY = "user.home";
+    private static final String DAEMON_BASE_DIR = ".agent-remote";
+    private static final String STATE_DIR = "state";
+    private static final String CREDENTIALS_DIR = "credentials";
+    private static final String DEVICE_STATE_FILE = "device.json";
+    private static final String DEVICE_CREDENTIAL_FILE = "device-credential.json";
+
     private final ObjectMapper objectMapper;
     private final Path baseDir;
 
     public DaemonStateStore(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
-        this.baseDir = Path.of(System.getProperty("user.home"), ".agent-remote");
+        this.baseDir = Path.of(System.getProperty(USER_HOME_PROPERTY), DAEMON_BASE_DIR);
     }
 
     public synchronized String getOrCreateInstallationId() {
-        Path path = baseDir.resolve("state").resolve("device.json");
+        Path path = baseDir.resolve(STATE_DIR).resolve(DEVICE_STATE_FILE);
         try {
             if (Files.exists(path)) {
                 return objectMapper.readValue(Files.readString(path, StandardCharsets.UTF_8),
@@ -76,7 +83,7 @@ public class DaemonStateStore {
     }
 
     private Path credentialPath() {
-        return baseDir.resolve("credentials").resolve("device-credential.json");
+        return baseDir.resolve(CREDENTIALS_DIR).resolve(DEVICE_CREDENTIAL_FILE);
     }
 
     private void writeSecure(Path path, String content) throws IOException {

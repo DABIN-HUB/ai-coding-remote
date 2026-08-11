@@ -280,6 +280,18 @@ private XxxService xxxService;
 
 协议名称、Codex App Server method 名等固定协议字符串，应集中放入专门的协议常量类，禁止散落在各个 Adapter、Mapper、Service 中。
 
+本规则同时适用于 `src/main` 和 `src/test`：
+
+* 状态、类型、阶段等有限集合优先使用 Enum，例如连接状态、设备状态、凭证状态、事务测试阶段；
+* 协议固定值、Redis Key、HTTP Header、ID Prefix 使用常量或专用 builder，例如 `AgentCoordinationKeys`、`AgentHttpHeaders`；
+* timeout、TTL、queue capacity、retry count、wait time、heartbeat 等运行参数使用 `ConfigurationProperties`；
+* 对外业务错误统一使用 `ErrorCodeConstants`，禁止在 Controller / Service 中硬编码错误码和错误信息；
+* 重复测试 Fixture 使用 `private static final` 语义常量，例如 `TEST_TENANT_ID`、`TEST_DEVICE_ID`、`PAIRING_CODE`；
+* 重复测试状态、阶段、事件标签使用测试专用 Enum，禁止用裸 `String` 模拟有限状态集合；
+* 已有明确 DTO / VO / Payload / Enum 时，禁止用 `Map` 或 `String` 承载同一结构化语义。
+
+不要机械抽取所有字符串。单次日志文本、异常诊断文本、测试说明性文本、只在局部使用且没有复用语义的普通字符串可以直接保留。禁止为了“零字符串”创建 `CommonConstants`、`GlobalConstants`、`ConstantsUtils` 等垃圾桶常量类。
+
 ## 10. 错误码规则
 
 所有对外业务错误禁止直接写：

@@ -2,6 +2,7 @@ package com.wangbin.ai.agent.daemon.cloud.controlplane;
 
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wangbin.ai.agent.contract.protocol.AgentHttpHeaders;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
@@ -15,9 +16,10 @@ import java.net.http.HttpResponse;
 @Component
 public class HttpControlPlaneClient implements ControlPlaneClient {
 
-    private static final String HEADER_TENANT_ID = "tenant-id";
-    private static final String HEADER_CREDENTIAL_ID = "X-Agent-Credential-Id";
-    private static final String HEADER_CREDENTIAL_SECRET = "X-Agent-Credential-Secret";
+    private static final String PAIR_DEVICE_PATH = "/agent/device/pair";
+    private static final String CREATE_RELAY_TICKET_PATH = "/agent/device/createRelayTicket";
+    private static final String HEADER_CONTENT_TYPE = "Content-Type";
+    private static final String CONTENT_TYPE_JSON = "application/json";
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -29,17 +31,17 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
 
     @Override
     public PairDeviceResponse pair(String controlPlaneUrl, PairDeviceRequest request) {
-        return post(controlPlaneUrl + "/agent/device/pair", request, PairDeviceResponse.class);
+        return post(controlPlaneUrl + PAIR_DEVICE_PATH, request, PairDeviceResponse.class);
     }
 
     @Override
     public RelayTicketResponse createDeviceRelayTicket(DeviceCredentialState credential) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(credential.getControlPlaneUrl() + "/agent/device/createRelayTicket"))
-                    .header(HEADER_TENANT_ID, String.valueOf(credential.getTenantId()))
-                    .header(HEADER_CREDENTIAL_ID, credential.getCredentialId())
-                    .header(HEADER_CREDENTIAL_SECRET, credential.getCredentialSecret())
+                    .uri(URI.create(credential.getControlPlaneUrl() + CREATE_RELAY_TICKET_PATH))
+                    .header(AgentHttpHeaders.TENANT_ID, String.valueOf(credential.getTenantId()))
+                    .header(AgentHttpHeaders.CREDENTIAL_ID, credential.getCredentialId())
+                    .header(AgentHttpHeaders.CREDENTIAL_SECRET, credential.getCredentialSecret())
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build();
             return send(request, RelayTicketResponse.class);
@@ -52,7 +54,7 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
-                    .header("Content-Type", "application/json")
+                    .header(HEADER_CONTENT_TYPE, CONTENT_TYPE_JSON)
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
                     .build();
             return send(request, responseType);

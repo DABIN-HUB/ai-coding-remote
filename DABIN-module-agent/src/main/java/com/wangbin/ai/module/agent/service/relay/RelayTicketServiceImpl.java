@@ -21,6 +21,8 @@ import static com.wangbin.ai.module.agent.enums.ErrorCodeConstants.RELAY_TICKET_
 @RequiredArgsConstructor
 public class RelayTicketServiceImpl implements RelayTicketService {
 
+    private static final int SECRET_BYTE_LENGTH = 32;
+
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final AgentControlPlaneProperties properties;
@@ -52,7 +54,7 @@ public class RelayTicketServiceImpl implements RelayTicketService {
     }
 
     private String randomSecret() {
-        byte[] bytes = new byte[32];
+        byte[] bytes = new byte[SECRET_BYTE_LENGTH];
         secureRandom.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }

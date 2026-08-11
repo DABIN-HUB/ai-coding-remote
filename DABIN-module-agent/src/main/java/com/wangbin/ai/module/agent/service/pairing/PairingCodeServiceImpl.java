@@ -21,6 +21,8 @@ import static com.wangbin.ai.module.agent.enums.ErrorCodeConstants.PAIRING_CODE_
 public class PairingCodeServiceImpl implements PairingCodeService {
 
     private static final char[] PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
+    private static final int PAIRING_CODE_PART_LENGTH = 4;
+    private static final String PAIRING_CODE_SEPARATOR = "-";
 
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
@@ -66,7 +68,8 @@ public class PairingCodeServiceImpl implements PairingCodeService {
     }
 
     private String generateCode() {
-        return randomPart(4) + "-" + randomPart(4);
+        return randomPart(PAIRING_CODE_PART_LENGTH) + PAIRING_CODE_SEPARATOR
+                + randomPart(PAIRING_CODE_PART_LENGTH);
     }
 
     private String randomPart(int length) {

@@ -21,13 +21,36 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class DeltaEventAggregatorTest {
 
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
+    private static final String TRACE_ID = "trace-1";
+    private static final String DEVICE_ID = "device-1";
+    private static final String PROJECT_ID = "project-1";
+    private static final String DEFAULT_SESSION_ID = "session-1";
+    private static final String SESSION_A = "session-a";
+    private static final String SESSION_B = "session-b";
+    private static final String MESSAGE_ID = "msg-1";
+    private static final String MESSAGE_A = "msg-a";
+    private static final String MESSAGE_B = "msg-b";
+    private static final String MESSAGE_ROLE_ASSISTANT = "assistant";
+    private static final String NATIVE_SESSION_ID = "native-1";
+    private static final java.time.Duration FAST_AGGREGATION_WINDOW = java.time.Duration.ofMillis(20);
+    private static final int SMALL_AGGREGATION_MAX_CHARS = 5;
+    private static final int LARGE_AGGREGATION_MAX_CHARS = 100;
+    private static final long FIRST_SEQUENCE_BASE = 10L;
+    private static final long TIMER_SEQUENCE_BASE = 20L;
+    private static final long CLOSE_SEQUENCE_BASE = 30L;
+    private static final long FINAL_SEQUENCE_BASE = 40L;
+    private static final long IDLE_INPUT_SEQUENCE = 99L;
+    private static final long AWAIT_TIMEOUT_SECONDS = 1L;
+
     @Test
     void keepsIntermediateFlushesAsDeltaAndFinalizesOnlyOnCompletedMessage() {
         AgentDaemonProperties properties = new AgentDaemonProperties();
-        properties.setEventAggregationMaxChars(5);
+        properties.setEventAggregationMaxChars(SMALL_AGGREGATION_MAX_CHARS);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
-        AtomicLong sequence = new AtomicLong(10);
+        AtomicLong sequence = new AtomicLong(FIRST_SEQUENCE_BASE);
 
         try {
             List<AgentEvent> firstFlush = aggregator.accept(delta("hello", 1), sequence::incrementAndGet, ignored -> {
@@ -63,10 +86,10 @@ class DeltaEventAggregatorTest {
     @Test
     void flushesDeltaWhenAggregationWindowExpiresWithoutNextEvent() throws Exception {
         AgentDaemonProperties properties = new AgentDaemonProperties();
-        properties.setEventAggregationWindow(java.time.Duration.ofMillis(20));
+        properties.setEventAggregationWindow(FAST_AGGREGATION_WINDOW);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
-        AtomicLong sequence = new AtomicLong(20);
+        AtomicLong sequence = new AtomicLong(TIMER_SEQUENCE_BASE);
         CountDownLatch latch = new CountDownLatch(1);
         List<AgentEvent> flushed = new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -76,7 +99,7 @@ class DeltaEventAggregatorTest {
                 latch.countDown();
             })).isEmpty();
 
-            assertThat(latch.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(latch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
             assertThat(flushed).hasSize(1);
             assertThat(flushed.getFirst().type()).isEqualTo(AgentEventType.AGENT_MESSAGE_DELTA);
             assertThat(flushed.getFirst().seq()).isZero();
@@ -90,13 +113,13 @@ class DeltaEventAggregatorTest {
         AgentDaemonProperties properties = new AgentDaemonProperties();
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
-        AtomicLong sequence = new AtomicLong(30);
+        AtomicLong sequence = new AtomicLong(CLOSE_SEQUENCE_BASE);
 
         try {
             assertThat(aggregator.accept(delta("pending", 7), sequence::incrementAndGet, ignored -> {
             })).isEmpty();
 
-            List<AgentEvent> flushed = aggregator.closeSession("session-1", sequence::incrementAndGet, ignored -> {
+            List<AgentEvent> flushed = aggregator.closeSession(DEFAULT_SESSION_ID, sequence::incrementAndGet, ignored -> {
             });
 
             assertThat(flushed).hasSize(1);
@@ -114,7 +137,7 @@ class DeltaEventAggregatorTest {
         AgentDaemonProperties properties = new AgentDaemonProperties();
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
-        AtomicLong sequence = new AtomicLong(40);
+        AtomicLong sequence = new AtomicLong(FINAL_SEQUENCE_BASE);
 
         try {
             assertThat(aggregator.accept(delta("hello", 100), sequence::incrementAndGet, ignored -> {
@@ -141,7 +164,7 @@ class DeltaEventAggregatorTest {
     @Test
     void assignsContinuousSequenceOnlyToActuallyEmittedEventsPerSession() {
         AgentDaemonProperties properties = new AgentDaemonProperties();
-        properties.setEventAggregationMaxChars(100);
+        properties.setEventAggregationMaxChars(LARGE_AGGREGATION_MAX_CHARS);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
         SerializedSessionEventEmitter emitter = new SerializedSessionEventEmitter();
@@ -151,26 +174,26 @@ class DeltaEventAggregatorTest {
         List<AgentEvent> sessionBObserved = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         try {
-            assertThat(aggregator.accept(delta("a", "session-a", "msg-a"), sessionASequence::incrementAndGet,
+            assertThat(aggregator.accept(delta("a", SESSION_A, MESSAGE_A), sessionASequence::incrementAndGet,
                     ignored -> {
                     })).isEmpty();
-            List<AgentEvent> sessionAStarted = aggregator.accept(sessionState("session-a"),
+            List<AgentEvent> sessionAStarted = aggregator.accept(sessionState(SESSION_A),
                     sessionASequence::incrementAndGet, ignored -> {
                     });
-            assertThat(aggregator.accept(delta("b", "session-a", "msg-a"), sessionASequence::incrementAndGet,
+            assertThat(aggregator.accept(delta("b", SESSION_A, MESSAGE_A), sessionASequence::incrementAndGet,
                     ignored -> {
                     })).isEmpty();
-            List<AgentEvent> sessionAFinal = aggregator.accept(finalMessage("ab", "session-a", "msg-a"),
+            List<AgentEvent> sessionAFinal = aggregator.accept(finalMessage("ab", SESSION_A, MESSAGE_A),
                     sessionASequence::incrementAndGet, ignored -> {
                     });
-            List<AgentEvent> sessionAIdle = aggregator.accept(idle("session-a"), sessionASequence::incrementAndGet,
+            List<AgentEvent> sessionAIdle = aggregator.accept(idle(SESSION_A), sessionASequence::incrementAndGet,
                     ignored -> {
                     });
 
-            List<AgentEvent> sessionBFinal = aggregator.accept(finalMessage("done", "session-b", "msg-b"),
+            List<AgentEvent> sessionBFinal = aggregator.accept(finalMessage("done", SESSION_B, MESSAGE_B),
                     sessionBSequence::incrementAndGet, ignored -> {
                     });
-            List<AgentEvent> sessionBIdle = aggregator.accept(idle("session-b"), sessionBSequence::incrementAndGet,
+            List<AgentEvent> sessionBIdle = aggregator.accept(idle(SESSION_B), sessionBSequence::incrementAndGet,
                     ignored -> {
                     });
 
@@ -191,45 +214,45 @@ class DeltaEventAggregatorTest {
     }
 
     private AgentEvent delta(String content, long seq) {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
-                "session-1", seq, AgentType.CODEX, AgentEventType.AGENT_MESSAGE_DELTA, null, null,
-                new AgentMessagePayload("msg-1", "assistant", content, true, Map.of()), Map.of());
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
+                DEFAULT_SESSION_ID, seq, AgentType.CODEX, AgentEventType.AGENT_MESSAGE_DELTA, null, null,
+                new AgentMessagePayload(MESSAGE_ID, MESSAGE_ROLE_ASSISTANT, content, true, Map.of()), Map.of());
     }
 
     private AgentEvent delta(String content, String sessionId, String messageId) {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
                 sessionId, 0, AgentType.CODEX, AgentEventType.AGENT_MESSAGE_DELTA, null, null,
-                new AgentMessagePayload(messageId, "assistant", content, true, Map.of()), Map.of());
+                new AgentMessagePayload(messageId, MESSAGE_ROLE_ASSISTANT, content, true, Map.of()), Map.of());
     }
 
     private AgentEvent finalMessage(String content, long seq) {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
-                "session-1", seq, AgentType.CODEX, AgentEventType.AGENT_MESSAGE, null, null,
-                new AgentMessagePayload("msg-1", "assistant", content, false, Map.of()), Map.of());
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
+                DEFAULT_SESSION_ID, seq, AgentType.CODEX, AgentEventType.AGENT_MESSAGE, null, null,
+                new AgentMessagePayload(MESSAGE_ID, MESSAGE_ROLE_ASSISTANT, content, false, Map.of()), Map.of());
     }
 
     private AgentEvent finalMessage(String content, String sessionId, String messageId) {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
                 sessionId, 0, AgentType.CODEX, AgentEventType.AGENT_MESSAGE, null, null,
-                new AgentMessagePayload(messageId, "assistant", content, false, Map.of()), Map.of());
+                new AgentMessagePayload(messageId, MESSAGE_ROLE_ASSISTANT, content, false, Map.of()), Map.of());
     }
 
     private AgentEvent sessionState(String sessionId) {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
                 sessionId, 0, AgentType.CODEX, AgentEventType.SESSION_STATE_CHANGED, null, null,
-                new SessionPayload("native-1", AgentSessionStatus.RUNNING, null, Map.of()), Map.of());
+                new SessionPayload(NATIVE_SESSION_ID, AgentSessionStatus.RUNNING, null, Map.of()), Map.of());
     }
 
     private AgentEvent idle() {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
-                "session-1", 99, AgentType.CODEX, AgentEventType.SESSION_IDLE, null, null,
-                new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()), Map.of());
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
+                DEFAULT_SESSION_ID, IDLE_INPUT_SEQUENCE, AgentType.CODEX, AgentEventType.SESSION_IDLE, null, null,
+                new SessionPayload(NATIVE_SESSION_ID, AgentSessionStatus.IDLE, null, Map.of()), Map.of());
     }
 
     private AgentEvent idle(String sessionId) {
-        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
                 sessionId, 0, AgentType.CODEX, AgentEventType.SESSION_IDLE, null, null,
-                new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()), Map.of());
+                new SessionPayload(NATIVE_SESSION_ID, AgentSessionStatus.IDLE, null, Map.of()), Map.of());
     }
 
     @SafeVarargs

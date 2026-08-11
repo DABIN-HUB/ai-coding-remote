@@ -41,23 +41,35 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RelayWebSocketHandlerTest {
 
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
+    private static final String TEST_DEVICE_ID = "dev-1";
+    private static final String RELAY_TICKET = "ticket-1";
+    private static final String CONSUMED_RELAY_TICKET = "consumed-ticket";
+    private static final String TEST_WEB_SOCKET_ID = "test-ws";
+    private static final String INCOMPATIBLE_PROTOCOL_VERSION = "9.9";
+    private static final Duration HELLO_TIMEOUT = Duration.ofMillis(10);
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofMillis(50);
+    private static final Duration HEARTBEAT_TIMEOUT = Duration.ofMillis(100);
+    private static final Duration TEST_BLOCK_TIMEOUT = Duration.ofSeconds(1);
+    private static final long RELAY_TICKET_TTL_SECONDS = 60L;
+
     private final ObjectMapper objectMapper = JsonMapper.builder().addModule(new JavaTimeModule()).build();
 
     @Test
     void helloWithValidDeviceTicketAuthenticatesAndReturnsWelcome() throws Exception {
         AgentRelayProperties properties = properties();
         InMemoryConnectionManager connectionManager = new InMemoryConnectionManager(properties);
-        RelayTicketPayload ticket = new RelayTicketPayload("ticket-1", RelaySubjectType.DEVICE, 1L,
-                11L, "dev-1", Instant.now(), Instant.now().plusSeconds(60));
+        RelayTicketPayload ticket = deviceTicket();
         StubPresenceRegistry presenceRegistry = new StubPresenceRegistry(properties);
         RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
                 new StubAuthenticator(ticket), connectionManager, presenceRegistry);
-        TestWebSocketSession session = new TestWebSocketSession(hello("ticket-1"));
+        TestWebSocketSession session = new TestWebSocketSession(hello(RELAY_TICKET));
 
-        handler.handle(session).block(Duration.ofSeconds(1));
+        handler.handle(session).block(TEST_BLOCK_TIMEOUT);
 
         assertThat(presenceRegistry.registered.get()).isNotNull();
-        assertThat(presenceRegistry.registered.get().deviceId()).isEqualTo("dev-1");
+        assertThat(presenceRegistry.registered.get().deviceId()).isEqualTo(TEST_DEVICE_ID);
         assertThat(session.sentPayloads).anySatisfy(payload ->
                 assertThat(payload).contains("\"type\":\"WELCOME\""));
         assertThat(session.sendCalls.get()).isEqualTo(1);
@@ -69,25 +81,30 @@ class RelayWebSocketHandlerTest {
         RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
                 new StubAuthenticator(null), new InMemoryConnectionManager(properties),
                 new StubPresenceRegistry(properties));
-        TestWebSocketSession session = new TestWebSocketSession(hello("consumed-ticket"));
+        TestWebSocketSession session = new TestWebSocketSession(hello(CONSUMED_RELAY_TICKET));
 
-        assertThatThrownBy(() -> handler.handle(session).block(Duration.ofSeconds(1)))
+        assertThatThrownBy(() -> handler.handle(session).block(TEST_BLOCK_TIMEOUT))
                 .hasMessageContaining("relay ticket is invalid or consumed");
     }
 
     @Test
     void incompatibleProtocolVersionDoesNotConsumeRelayTicket() throws Exception {
         AgentRelayProperties properties = properties();
-        CountingAuthenticator authenticator = new CountingAuthenticator(new RelayTicketPayload("ticket-1",
-                RelaySubjectType.DEVICE, 1L, 11L, "dev-1", Instant.now(), Instant.now().plusSeconds(60)));
+        CountingAuthenticator authenticator = new CountingAuthenticator(deviceTicket());
         RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
                 authenticator, new InMemoryConnectionManager(properties), new StubPresenceRegistry(properties));
         String invalidHello = objectMapper.writeValueAsString(new WsEnvelope<>(null, WsMessageType.HELLO,
-                "9.9", null, new HelloPayload("9.9", "ticket-1")));
+                INCOMPATIBLE_PROTOCOL_VERSION, null,
+                new HelloPayload(INCOMPATIBLE_PROTOCOL_VERSION, RELAY_TICKET)));
 
-        assertThatThrownBy(() -> handler.handle(new TestWebSocketSession(invalidHello)).block(Duration.ofSeconds(1)))
+        assertThatThrownBy(() -> handler.handle(new TestWebSocketSession(invalidHello)).block(TEST_BLOCK_TIMEOUT))
                 .hasMessageContaining("protocolVersion");
         assertThat(authenticator.consumeCount.get()).isZero();
+    }
+
+    private RelayTicketPayload deviceTicket() {
+        return new RelayTicketPayload(RELAY_TICKET, RelaySubjectType.DEVICE, TEST_TENANT_ID, TEST_USER_ID,
+                TEST_DEVICE_ID, Instant.now(), Instant.now().plusSeconds(RELAY_TICKET_TTL_SECONDS));
     }
 
     private String hello(String ticket) throws Exception {
@@ -97,9 +114,9 @@ class RelayWebSocketHandlerTest {
 
     private AgentRelayProperties properties() {
         AgentRelayProperties properties = new AgentRelayProperties();
-        properties.setHelloTimeout(Duration.ofMillis(10));
-        properties.setHeartbeatInterval(Duration.ofMillis(50));
-        properties.setHeartbeatTimeout(Duration.ofMillis(100));
+        properties.setHelloTimeout(HELLO_TIMEOUT);
+        properties.setHeartbeatInterval(HEARTBEAT_INTERVAL);
+        properties.setHeartbeatTimeout(HEARTBEAT_TIMEOUT);
         return properties;
     }
 
@@ -173,7 +190,7 @@ class RelayWebSocketHandlerTest {
 
         @Override
         public String getId() {
-            return "test-ws";
+            return TEST_WEB_SOCKET_ID;
         }
 
         @Override

@@ -22,6 +22,12 @@ import static org.mockito.Mockito.when;
 
 class PairingCodeServiceImplTest {
 
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
+    private static final String PAIRING_CODE = "ABCD-EFGH";
+    private static final Duration TEST_PAIRING_TTL = Duration.ofMinutes(3);
+    private static final long TEST_PAIRING_TTL_SECONDS = 60L;
+
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
     private final ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
     private final ObjectMapper objectMapper = JsonMapper.builder().addModule(new JavaTimeModule()).build();
@@ -31,39 +37,39 @@ class PairingCodeServiceImplTest {
 
     @Test
     void createPairingCodeUsesSafeFormatAndConfiguredTtl() {
-        properties.setPairingCodeTtl(Duration.ofMinutes(3));
+        properties.setPairingCodeTtl(TEST_PAIRING_TTL);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.setIfAbsent(any(String.class), any(String.class), eq(Duration.ofMinutes(3))))
+        when(valueOperations.setIfAbsent(any(String.class), any(String.class), eq(TEST_PAIRING_TTL)))
                 .thenReturn(true);
 
-        PairingCodePayload payload = service.createPairingCode(1L, 11L);
+        PairingCodePayload payload = service.createPairingCode(TEST_TENANT_ID, TEST_USER_ID);
 
         assertThat(payload.pairingCode()).matches("[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}");
-        assertThat(payload.tenantId()).isEqualTo(1L);
-        assertThat(payload.userId()).isEqualTo(11L);
+        assertThat(payload.tenantId()).isEqualTo(TEST_TENANT_ID);
+        assertThat(payload.userId()).isEqualTo(TEST_USER_ID);
         verify(valueOperations).setIfAbsent(eq(AgentCoordinationKeys.pairing(payload.pairingCode())),
-                any(String.class), eq(Duration.ofMinutes(3)));
+                any(String.class), eq(TEST_PAIRING_TTL));
     }
 
     @Test
     void createPairingCodeRetriesWhenGeneratedKeyAlreadyExists() {
-        properties.setPairingCodeTtl(Duration.ofMinutes(3));
+        properties.setPairingCodeTtl(TEST_PAIRING_TTL);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.setIfAbsent(any(String.class), any(String.class), eq(Duration.ofMinutes(3))))
+        when(valueOperations.setIfAbsent(any(String.class), any(String.class), eq(TEST_PAIRING_TTL)))
                 .thenReturn(false)
                 .thenReturn(true);
 
-        PairingCodePayload payload = service.createPairingCode(1L, 11L);
+        PairingCodePayload payload = service.createPairingCode(TEST_TENANT_ID, TEST_USER_ID);
 
         assertThat(payload.pairingCode()).isNotBlank();
         verify(valueOperations, times(2)).setIfAbsent(any(String.class), any(String.class),
-                eq(Duration.ofMinutes(3)));
+                eq(TEST_PAIRING_TTL));
     }
 
     @Test
     void consumePairingCodeUsesAtomicGetAndDelete() throws Exception {
-        PairingCodePayload payload = new PairingCodePayload("ABCD-EFGH", 1L, 11L,
-                java.time.Instant.now(), java.time.Instant.now().plusSeconds(60));
+        PairingCodePayload payload = new PairingCodePayload(PAIRING_CODE, TEST_TENANT_ID, TEST_USER_ID,
+                java.time.Instant.now(), java.time.Instant.now().plusSeconds(TEST_PAIRING_TTL_SECONDS));
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.getAndDelete(AgentCoordinationKeys.pairing(payload.pairingCode())))
                 .thenReturn(objectMapper.writeValueAsString(payload));

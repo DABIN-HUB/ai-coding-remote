@@ -19,22 +19,33 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class SerializedSessionEventEmitterTest {
 
+    private static final Long TEST_TENANT_ID = 1L;
+    private static final Long TEST_USER_ID = 11L;
+    private static final String SESSION_A = "session-a";
+    private static final String DEVICE_ID = "device-1";
+    private static final String PROJECT_ID = "project-1";
+    private static final String TRACE_PREFIX = "trace-";
+    private static final String NATIVE_SESSION_ID = "native-1";
+    private static final int EVENT_COUNT = 20;
+    private static final int WORKER_THREADS = 4;
+    private static final long AWAIT_TIMEOUT_SECONDS = 1L;
+
     @Test
     void serializesSequenceAssignmentAndSinkEmissionPerSession() throws Exception {
         SerializedSessionEventEmitter emitter = new SerializedSessionEventEmitter();
         AtomicLong sequence = new AtomicLong();
         List<AgentEvent> observed = java.util.Collections.synchronizedList(new ArrayList<>());
         CountDownLatch start = new CountDownLatch(1);
-        CountDownLatch done = new CountDownLatch(20);
-        var executor = Executors.newFixedThreadPool(4);
+        CountDownLatch done = new CountDownLatch(EVENT_COUNT);
+        var executor = Executors.newFixedThreadPool(WORKER_THREADS);
 
         try {
-            for (int i = 0; i < 20; i++) {
+            for (int i = 0; i < EVENT_COUNT; i++) {
                 int index = i;
                 executor.submit(() -> {
                     try {
                         start.await();
-                        emitter.emit(event("session-a", index), sequence::incrementAndGet, observed::add);
+                        emitter.emit(event(SESSION_A, index), sequence::incrementAndGet, observed::add);
                     } catch (InterruptedException ex) {
                         Thread.currentThread().interrupt();
                     } finally {
@@ -44,11 +55,11 @@ class SerializedSessionEventEmitterTest {
             }
 
             start.countDown();
-            assertThat(done.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(done.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
 
-            assertThat(observed).hasSize(20);
+            assertThat(observed).hasSize(EVENT_COUNT);
             assertThat(observed).extracting(AgentEvent::seq)
-                    .containsExactlyElementsOf(java.util.stream.LongStream.rangeClosed(1, 20)
+                    .containsExactlyElementsOf(java.util.stream.LongStream.rangeClosed(1, EVENT_COUNT)
                             .boxed().toList());
         } finally {
             executor.shutdownNow();
@@ -56,8 +67,8 @@ class SerializedSessionEventEmitterTest {
     }
 
     private AgentEvent event(String sessionId, int index) {
-        return new AgentEvent(null, "trace-" + index, 1L, 11L, "device-1", "project-1",
+        return new AgentEvent(null, TRACE_PREFIX + index, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
                 sessionId, 0, AgentType.CODEX, AgentEventType.SESSION_STATE_CHANGED, null, null,
-                new SessionPayload("native-1", AgentSessionStatus.RUNNING, null, Map.of()), Map.of());
+                new SessionPayload(NATIVE_SESSION_ID, AgentSessionStatus.RUNNING, null, Map.of()), Map.of());
     }
 }
