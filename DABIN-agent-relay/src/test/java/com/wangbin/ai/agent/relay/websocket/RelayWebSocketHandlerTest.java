@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -59,6 +60,7 @@ class RelayWebSocketHandlerTest {
         assertThat(presenceRegistry.registered.get().deviceId()).isEqualTo("dev-1");
         assertThat(session.sentPayloads).anySatisfy(payload ->
                 assertThat(payload).contains("\"type\":\"WELCOME\""));
+        assertThat(session.sendCalls.get()).isEqualTo(1);
     }
 
     @Test
@@ -71,6 +73,21 @@ class RelayWebSocketHandlerTest {
 
         assertThatThrownBy(() -> handler.handle(session).block(Duration.ofSeconds(1)))
                 .hasMessageContaining("relay ticket is invalid or consumed");
+    }
+
+    @Test
+    void incompatibleProtocolVersionDoesNotConsumeRelayTicket() throws Exception {
+        AgentRelayProperties properties = properties();
+        CountingAuthenticator authenticator = new CountingAuthenticator(new RelayTicketPayload("ticket-1",
+                RelaySubjectType.DEVICE, 1L, 11L, "dev-1", Instant.now(), Instant.now().plusSeconds(60)));
+        RelayWebSocketHandler handler = new RelayWebSocketHandler(objectMapper, properties,
+                authenticator, new InMemoryConnectionManager(properties), new StubPresenceRegistry(properties));
+        String invalidHello = objectMapper.writeValueAsString(new WsEnvelope<>(null, WsMessageType.HELLO,
+                "9.9", null, new HelloPayload("9.9", "ticket-1")));
+
+        assertThatThrownBy(() -> handler.handle(new TestWebSocketSession(invalidHello)).block(Duration.ofSeconds(1)))
+                .hasMessageContaining("protocolVersion");
+        assertThat(authenticator.consumeCount.get()).isZero();
     }
 
     private String hello(String ticket) throws Exception {
@@ -98,6 +115,23 @@ class RelayWebSocketHandlerTest {
         @Override
         public Mono<RelayTicketPayload> consume(String ticketValue) {
             return ticket == null ? Mono.empty() : Mono.just(ticket);
+        }
+    }
+
+    private static final class CountingAuthenticator extends RelayTicketAuthenticator {
+
+        private final RelayTicketPayload ticket;
+        private final AtomicInteger consumeCount = new AtomicInteger();
+
+        private CountingAuthenticator(RelayTicketPayload ticket) {
+            super(null, null);
+            this.ticket = ticket;
+        }
+
+        @Override
+        public Mono<RelayTicketPayload> consume(String ticketValue) {
+            consumeCount.incrementAndGet();
+            return Mono.just(ticket);
         }
     }
 
@@ -131,6 +165,7 @@ class RelayWebSocketHandlerTest {
         private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
         private final Flux<WebSocketMessage> inbound;
         private final List<String> sentPayloads = new CopyOnWriteArrayList<>();
+        private final AtomicInteger sendCalls = new AtomicInteger();
 
         private TestWebSocketSession(String firstText) {
             this.inbound = Flux.just(text(firstText));
@@ -163,6 +198,7 @@ class RelayWebSocketHandlerTest {
 
         @Override
         public Mono<Void> send(Publisher<WebSocketMessage> messages) {
+            sendCalls.incrementAndGet();
             return Flux.from(messages)
                     .doOnNext(message -> sentPayloads.add(message.getPayloadAsText(StandardCharsets.UTF_8)))
                     .then();

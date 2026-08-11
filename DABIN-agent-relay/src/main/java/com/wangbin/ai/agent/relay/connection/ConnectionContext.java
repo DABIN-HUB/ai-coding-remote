@@ -1,10 +1,10 @@
 package com.wangbin.ai.agent.relay.connection;
 
-import com.wangbin.ai.agent.relay.backpressure.BoundedOutboundMessageQueue;
+import com.wangbin.ai.agent.relay.backpressure.ConnectionOutboundChannel;
 import com.wangbin.ai.agent.relay.backpressure.OutboundMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
+import reactor.core.publisher.Flux;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.time.Instant;
@@ -13,17 +13,17 @@ public class ConnectionContext {
 
     private final ConnectionDescriptor descriptor;
     private final WebSocketSession session;
-    private final BoundedOutboundMessageQueue outboundQueue;
-    private final AtomicBoolean draining = new AtomicBoolean(false);
+    private final ConnectionOutboundChannel outboundChannel;
+    private final AtomicBoolean outboundClosed = new AtomicBoolean(false);
     private final AtomicReference<ConnectionAuthState> authState =
             new AtomicReference<>(ConnectionAuthState.CONNECTED_UNAUTHENTICATED);
     private volatile Instant lastPongAt = Instant.now();
 
     public ConnectionContext(ConnectionDescriptor descriptor, WebSocketSession session,
-                             BoundedOutboundMessageQueue outboundQueue) {
+                             ConnectionOutboundChannel outboundChannel) {
         this.descriptor = descriptor;
         this.session = session;
-        this.outboundQueue = outboundQueue;
+        this.outboundChannel = outboundChannel;
     }
 
     public ConnectionDescriptor descriptor() {
@@ -34,20 +34,16 @@ public class ConnectionContext {
         return session;
     }
 
-    public BoundedOutboundMessageQueue outboundQueue() {
-        return outboundQueue;
+    public ConnectionOutboundChannel outboundChannel() {
+        return outboundChannel;
     }
 
-    public boolean tryStartDraining() {
-        return draining.compareAndSet(false, true);
+    public boolean enqueue(OutboundMessage message) {
+        return outboundChannel.enqueue(message);
     }
 
-    public void finishDraining() {
-        draining.set(false);
-    }
-
-    public List<OutboundMessage> drainAll() {
-        return outboundQueue.drainAll();
+    public Flux<OutboundMessage> outboundMessages() {
+        return outboundChannel.messages();
     }
 
     public ConnectionAuthState authState() {
@@ -60,6 +56,9 @@ public class ConnectionContext {
 
     public void markClosed() {
         authState.set(ConnectionAuthState.CLOSED);
+        if (outboundClosed.compareAndSet(false, true)) {
+            outboundChannel.complete();
+        }
     }
 
     public Instant lastPongAt() {

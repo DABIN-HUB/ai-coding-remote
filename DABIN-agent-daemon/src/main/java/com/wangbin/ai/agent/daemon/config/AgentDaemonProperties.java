@@ -77,6 +77,8 @@ public class AgentDaemonProperties {
 
         private Duration reconnectMaxDelay = Duration.ofSeconds(30);
 
+        private Duration welcomeTimeout = Duration.ofSeconds(10);
+
         public String getControlPlaneUrl() {
             return controlPlaneUrl;
         }
@@ -107,6 +109,14 @@ public class AgentDaemonProperties {
 
         public void setReconnectMaxDelay(Duration reconnectMaxDelay) {
             this.reconnectMaxDelay = reconnectMaxDelay;
+        }
+
+        public Duration getWelcomeTimeout() {
+            return welcomeTimeout;
+        }
+
+        public void setWelcomeTimeout(Duration welcomeTimeout) {
+            this.welcomeTimeout = welcomeTimeout;
         }
     }
 

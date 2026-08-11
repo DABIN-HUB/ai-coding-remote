@@ -7,6 +7,7 @@ import org.redisson.api.RBucket;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Consumes relay ticket exactly once during WebSocket HELLO.
@@ -27,6 +28,6 @@ public class RelayTicketAuthenticator {
             RBucket<String> bucket = redissonClient.getBucket(AgentCoordinationKeys.relayTicket(ticket));
             String value = bucket.getAndDelete();
             return value == null ? null : objectMapper.readValue(value, RelayTicketPayload.class);
-        });
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 }

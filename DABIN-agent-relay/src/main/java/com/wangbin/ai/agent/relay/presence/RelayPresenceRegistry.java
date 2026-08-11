@@ -10,6 +10,7 @@ import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.StringCodec;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Instant;
 import java.util.List;
@@ -23,7 +24,11 @@ public class RelayPresenceRegistry {
 
     private static final String COMPARE_DELETE_SCRIPT = """
             local current = redis.call('GET', KEYS[1])
-            if current and string.find(current, ARGV[1], 1, true) then
+            if not current then
+              return 0
+            end
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and decoded and decoded.connectionId == ARGV[1] then
               return redis.call('DEL', KEYS[1])
             end
             return 0
@@ -41,7 +46,7 @@ public class RelayPresenceRegistry {
     }
 
     public Mono<Void> register(ConnectionDescriptor descriptor, String relayNodeId) {
-        return Mono.fromRunnable(() -> {
+        return Mono.<Void>fromRunnable(() -> {
             Instant now = Instant.now();
             if (descriptor.deviceId() != null) {
                 DevicePresencePayload presence = new DevicePresencePayload(relayNodeId, descriptor.connectionId(),
@@ -55,7 +60,7 @@ public class RelayPresenceRegistry {
                         descriptor.tenantId(), descriptor.userId(), now, now);
                 setJson(AgentCoordinationKeys.userRoute(descriptor.userId(), descriptor.connectionId()), route);
             }
-        });
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     public Mono<Void> refresh(ConnectionDescriptor descriptor, String relayNodeId) {
@@ -63,7 +68,7 @@ public class RelayPresenceRegistry {
     }
 
     public Mono<Void> unregister(ConnectionDescriptor descriptor) {
-        return Mono.fromRunnable(() -> {
+        return Mono.<Void>fromRunnable(() -> {
             if (descriptor.deviceId() != null) {
                 compareDelete(AgentCoordinationKeys.devicePresence(descriptor.deviceId()), descriptor.connectionId());
                 compareDelete(AgentCoordinationKeys.deviceRoute(descriptor.deviceId()), descriptor.connectionId());
@@ -71,7 +76,7 @@ public class RelayPresenceRegistry {
                 redissonClient.getBucket(AgentCoordinationKeys.userRoute(descriptor.userId(),
                         descriptor.connectionId())).delete();
             }
-        });
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private void setJson(String key, Object value) {

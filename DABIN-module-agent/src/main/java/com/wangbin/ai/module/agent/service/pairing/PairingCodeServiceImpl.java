@@ -10,9 +10,10 @@ import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
 import java.time.Instant;
-import java.util.concurrent.TimeUnit;
 
 import static com.wangbin.ai.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.wangbin.ai.module.agent.enums.ErrorCodeConstants.PAIRING_CODE_CONSUME_FAILED;
+import static com.wangbin.ai.module.agent.enums.ErrorCodeConstants.PAIRING_CODE_CREATE_FAILED;
 import static com.wangbin.ai.module.agent.enums.ErrorCodeConstants.PAIRING_CODE_NOT_EXISTS;
 
 @Service
@@ -28,18 +29,22 @@ public class PairingCodeServiceImpl implements PairingCodeService {
 
     @Override
     public PairingCodePayload createPairingCode(Long tenantId, Long userId) {
-        Instant now = Instant.now();
-        String code = generateCode();
-        PairingCodePayload payload = new PairingCodePayload(code, tenantId, userId, now,
-                now.plus(properties.getPairingCodeTtl()));
-        try {
-            stringRedisTemplate.opsForValue().set(AgentCoordinationKeys.pairing(code),
-                    objectMapper.writeValueAsString(payload), properties.getPairingCodeTtl().toMillis(),
-                    TimeUnit.MILLISECONDS);
-            return payload;
-        } catch (Exception ex) {
-            throw new IllegalStateException("failed to store pairing code", ex);
+        for (int i = 0; i < properties.getPairingCodeCreateMaxRetries(); i++) {
+            Instant now = Instant.now();
+            String code = generateCode();
+            PairingCodePayload payload = new PairingCodePayload(code, tenantId, userId, now,
+                    now.plus(properties.getPairingCodeTtl()));
+            try {
+                Boolean stored = stringRedisTemplate.opsForValue().setIfAbsent(AgentCoordinationKeys.pairing(code),
+                        objectMapper.writeValueAsString(payload), properties.getPairingCodeTtl());
+                if (Boolean.TRUE.equals(stored)) {
+                    return payload;
+                }
+            } catch (Exception ex) {
+                throw exception(PAIRING_CODE_CREATE_FAILED);
+            }
         }
+        throw exception(PAIRING_CODE_CREATE_FAILED);
     }
 
     /**
@@ -56,7 +61,7 @@ public class PairingCodeServiceImpl implements PairingCodeService {
         } catch (RuntimeException ex) {
             throw ex;
         } catch (Exception ex) {
-            throw new IllegalStateException("failed to consume pairing code", ex);
+            throw exception(PAIRING_CODE_CONSUME_FAILED);
         }
     }
 

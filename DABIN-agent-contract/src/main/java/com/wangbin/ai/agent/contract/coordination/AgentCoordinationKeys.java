@@ -1,5 +1,10 @@
 package com.wangbin.ai.agent.contract.coordination;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
+
 /**
  * Redis coordination keys shared by Control Plane, Relay and Daemon-facing code.
  * This class is intentionally pure Java and contains no Redis client dependency.
@@ -12,6 +17,7 @@ public final class AgentCoordinationKeys {
     private static final String DEVICE_ROUTE_PREFIX = "agent:route:device:";
     private static final String USER_ROUTE_PREFIX = "agent:route:user:";
     private static final String RELAY_NODE_PREFIX = "agent:relay:node:";
+    private static final String PAIRING_LOCK_PREFIX = "agent:lock:pair:";
 
     private AgentCoordinationKeys() {
     }
@@ -38,5 +44,19 @@ public final class AgentCoordinationKeys {
 
     public static String relayNode(String relayNodeId) {
         return RELAY_NODE_PREFIX + relayNodeId;
+    }
+
+    public static String pairingLock(Long tenantId, Long userId, String installationId) {
+        return PAIRING_LOCK_PREFIX + tenantId + ":" + userId + ":" + sha256UrlSafe(installationId);
+    }
+
+    private static String sha256UrlSafe(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 digest is not available", ex);
+        }
     }
 }

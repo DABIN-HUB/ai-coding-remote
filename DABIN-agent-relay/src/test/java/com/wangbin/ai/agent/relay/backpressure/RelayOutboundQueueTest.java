@@ -35,17 +35,20 @@ class RelayOutboundQueueTest {
 
     @Test
     void createsIndependentOutboundQueuePerConnection() {
-        InMemoryConnectionManager manager = connectionManager(2);
+        InMemoryConnectionManager manager = connectionManager(1);
         manager.register(registration("connection-a", 11L)).block(Duration.ofSeconds(1));
         manager.register(registration("connection-b", 11L)).block(Duration.ofSeconds(1));
 
         var connectionA = manager.findByConnectionId("connection-a").orElseThrow();
         var connectionB = manager.findByConnectionId("connection-b").orElseThrow();
-        connectionA.outboundQueue().offer(new OutboundMessage("connection-a", EventPriority.NORMAL, "a-only", null));
+        assertThat(connectionA.enqueue(new OutboundMessage("connection-a", EventPriority.NORMAL, "a-only", null)))
+                .isTrue();
 
-        assertThat(connectionA.outboundQueue()).isNotSameAs(connectionB.outboundQueue());
-        assertThat(connectionA.outboundQueue().size()).isEqualTo(1);
-        assertThat(connectionB.outboundQueue().size()).isZero();
+        assertThat(connectionA.outboundChannel()).isNotSameAs(connectionB.outboundChannel());
+        assertThat(connectionA.enqueue(new OutboundMessage("connection-a", EventPriority.NORMAL, "a-full", null)))
+                .isFalse();
+        assertThat(connectionB.enqueue(new OutboundMessage("connection-b", EventPriority.NORMAL, "b-only", null)))
+                .isTrue();
     }
 
     @Test
@@ -53,12 +56,12 @@ class RelayOutboundQueueTest {
         InMemoryConnectionManager manager = connectionManager(1);
         manager.register(registration("connection-a", 11L)).block(Duration.ofSeconds(1));
         var connection = manager.findByConnectionId("connection-a").orElseThrow();
-        connection.outboundQueue().offer(new OutboundMessage("connection-a", EventPriority.CRITICAL, "already-full", null));
+        connection.enqueue(new OutboundMessage("connection-a", EventPriority.CRITICAL, "already-full", null));
         WebSocketEventDispatcher dispatcher = new WebSocketEventDispatcher(manager, objectMapper);
 
         assertThatThrownBy(() -> dispatcher.dispatchToUser(11L, criticalEvent()).block(Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("reliable outbound message rejected");
+                .hasMessageContaining("critical outbound message rejected");
     }
 
     private InMemoryConnectionManager connectionManager(int capacity) {

@@ -11,12 +11,12 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,14 +33,31 @@ class PairingCodeServiceImplTest {
     void createPairingCodeUsesSafeFormatAndConfiguredTtl() {
         properties.setPairingCodeTtl(Duration.ofMinutes(3));
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(any(String.class), any(String.class), eq(Duration.ofMinutes(3))))
+                .thenReturn(true);
 
         PairingCodePayload payload = service.createPairingCode(1L, 11L);
 
         assertThat(payload.pairingCode()).matches("[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}");
         assertThat(payload.tenantId()).isEqualTo(1L);
         assertThat(payload.userId()).isEqualTo(11L);
-        verify(valueOperations).set(eq(AgentCoordinationKeys.pairing(payload.pairingCode())),
-                any(String.class), eq(Duration.ofMinutes(3).toMillis()), eq(TimeUnit.MILLISECONDS));
+        verify(valueOperations).setIfAbsent(eq(AgentCoordinationKeys.pairing(payload.pairingCode())),
+                any(String.class), eq(Duration.ofMinutes(3)));
+    }
+
+    @Test
+    void createPairingCodeRetriesWhenGeneratedKeyAlreadyExists() {
+        properties.setPairingCodeTtl(Duration.ofMinutes(3));
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(any(String.class), any(String.class), eq(Duration.ofMinutes(3))))
+                .thenReturn(false)
+                .thenReturn(true);
+
+        PairingCodePayload payload = service.createPairingCode(1L, 11L);
+
+        assertThat(payload.pairingCode()).isNotBlank();
+        verify(valueOperations, times(2)).setIfAbsent(any(String.class), any(String.class),
+                eq(Duration.ofMinutes(3)));
     }
 
     @Test

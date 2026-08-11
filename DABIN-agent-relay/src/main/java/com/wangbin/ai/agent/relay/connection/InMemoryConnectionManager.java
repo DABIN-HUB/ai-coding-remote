@@ -1,6 +1,6 @@
 package com.wangbin.ai.agent.relay.connection;
 
-import com.wangbin.ai.agent.relay.backpressure.BoundedOutboundMessageQueue;
+import com.wangbin.ai.agent.relay.backpressure.ConnectionOutboundChannel;
 import com.wangbin.ai.agent.relay.config.AgentRelayProperties;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -27,13 +27,16 @@ public class InMemoryConnectionManager implements ConnectionManager {
     public Mono<Void> register(ConnectionRegistration registration) {
         return Mono.fromRunnable(() -> {
             ConnectionDescriptor descriptor = registration.descriptor();
+            ConnectionOutboundChannel outboundChannel = registration.outboundChannel() == null
+                    ? new ConnectionOutboundChannel(properties.getOutboundQueueCapacity())
+                    : registration.outboundChannel();
             ConnectionContext context = new ConnectionContext(descriptor, registration.session(),
-                    new BoundedOutboundMessageQueue(properties.getOutboundQueueCapacity()));
+                    outboundChannel);
             byConnectionId.put(descriptor.connectionId(), context);
             if (descriptor.deviceId() != null && !descriptor.deviceId().isBlank()) {
                 String oldConnectionId = deviceToConnectionId.put(descriptor.deviceId(), descriptor.connectionId());
                 if (oldConnectionId != null && !oldConnectionId.equals(descriptor.connectionId())) {
-                    ConnectionContext old = byConnectionId.remove(oldConnectionId);
+                    ConnectionContext old = removeConnectionMappings(oldConnectionId);
                     if (old != null) {
                         old.markClosed();
                         old.session().close().subscribe();
@@ -50,24 +53,38 @@ public class InMemoryConnectionManager implements ConnectionManager {
     @Override
     public Mono<Void> unregister(String connectionId) {
         return Mono.fromRunnable(() -> {
-            ConnectionContext removed = byConnectionId.remove(connectionId);
+            ConnectionContext removed = removeConnectionMappings(connectionId);
             if (removed == null) {
                 return;
             }
-            ConnectionDescriptor descriptor = removed.descriptor();
-            if (descriptor.deviceId() != null) {
-                deviceToConnectionId.remove(descriptor.deviceId(), connectionId);
-            }
-            if (descriptor.userId() != null) {
-                Set<String> ids = userToConnectionIds.get(descriptor.userId());
-                if (ids != null) {
-                    ids.remove(connectionId);
-                    if (ids.isEmpty()) {
-                        userToConnectionIds.remove(descriptor.userId());
-                    }
+            removed.markClosed();
+        });
+    }
+
+    /**
+     * Removes all in-memory indexes for the same connection id. Device route
+     * cleanup uses compare-remove so an old connection cannot delete a newer
+     * route for the same device.
+     */
+    private ConnectionContext removeConnectionMappings(String connectionId) {
+        ConnectionContext removed = byConnectionId.remove(connectionId);
+        if (removed == null) {
+            return null;
+        }
+        ConnectionDescriptor descriptor = removed.descriptor();
+        if (descriptor.deviceId() != null) {
+            deviceToConnectionId.remove(descriptor.deviceId(), connectionId);
+        }
+        if (descriptor.userId() != null) {
+            Set<String> ids = userToConnectionIds.get(descriptor.userId());
+            if (ids != null) {
+                ids.remove(connectionId);
+                if (ids.isEmpty()) {
+                    userToConnectionIds.remove(descriptor.userId());
                 }
             }
-        });
+        }
+        return removed;
     }
 
     @Override

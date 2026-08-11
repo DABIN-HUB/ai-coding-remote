@@ -13,4 +13,7 @@ public interface ErrorCodeConstants {
     ErrorCode DEVICE_ACCESS_DENIED = new ErrorCode(1_020_000_007, "无设备访问权限");
     ErrorCode RELAY_TICKET_CREATE_FAILED = new ErrorCode(1_020_000_008, "Relay Ticket 创建失败");
     ErrorCode TENANT_ID_REQUIRED = new ErrorCode(1_020_000_009, "缺少租户编号");
+    ErrorCode PAIRING_CODE_CREATE_FAILED = new ErrorCode(1_020_000_010, "Pairing code create failed");
+    ErrorCode PAIRING_CODE_CONSUME_FAILED = new ErrorCode(1_020_000_011, "Pairing code consume failed");
+    ErrorCode PAIRING_CONCURRENT_CONFLICT = new ErrorCode(1_020_000_012, "Device pairing is busy");
 }

@@ -2,6 +2,7 @@ package com.wangbin.ai.agent.daemon.cloud.relay;
 
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wangbin.ai.agent.contract.protocol.AgentProtocol;
 import com.wangbin.ai.agent.contract.websocket.HelloPayload;
 import com.wangbin.ai.agent.contract.websocket.PingPayload;
 import com.wangbin.ai.agent.contract.websocket.PongPayload;
@@ -26,18 +27,19 @@ import java.net.http.WebSocket;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Maintains the daemon outbound WebSocket to Relay. Every reconnect obtains a new
- * one-time Relay Ticket from Control Plane, because Relay tickets are consumed
- * during HELLO authentication and must never be cached.
+ * Maintains the daemon outbound WebSocket to Relay. Disconnect callbacks from
+ * old sockets are isolated by generation id, so a stale close cannot disturb a
+ * newer authenticated connection.
  */
 @Component
 public class RelayWebSocketClient {
@@ -48,23 +50,38 @@ public class RelayWebSocketClient {
     private final AgentDaemonProperties properties;
     private final ControlPlaneClient controlPlaneClient;
     private final ScheduledExecutorService cloudScheduler;
-    private final HttpClient httpClient;
+    private final RelayWebSocketConnector connector;
     private final AtomicReference<RelayConnectionState> state =
             new AtomicReference<>(RelayConnectionState.DISCONNECTED);
-    private final AtomicBoolean reconnectLoopActive = new AtomicBoolean(false);
+    private final AtomicLong generation = new AtomicLong();
+    private final Object lifecycleMonitor = new Object();
+    private volatile boolean running;
+    private volatile boolean connectInFlight;
     private volatile WebSocket webSocket;
     private volatile ScheduledFuture<?> reconnectFuture;
+    private volatile ScheduledFuture<?> authTimeoutFuture;
     private volatile int reconnectAttempt;
 
     public RelayWebSocketClient(ObjectMapper objectMapper,
                                 AgentDaemonProperties properties,
                                 ControlPlaneClient controlPlaneClient,
                                 @Qualifier("agentCloudScheduler") ScheduledExecutorService cloudScheduler) {
+        this(objectMapper, properties, controlPlaneClient, cloudScheduler,
+                (relayUri, listener) -> HttpClient.newHttpClient()
+                        .newWebSocketBuilder()
+                        .buildAsync(relayUri, listener));
+    }
+
+    RelayWebSocketClient(ObjectMapper objectMapper,
+                         AgentDaemonProperties properties,
+                         ControlPlaneClient controlPlaneClient,
+                         ScheduledExecutorService cloudScheduler,
+                         RelayWebSocketConnector connector) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.controlPlaneClient = controlPlaneClient;
         this.cloudScheduler = cloudScheduler;
-        this.httpClient = HttpClient.newHttpClient();
+        this.connector = connector;
     }
 
     public RelayConnectionState state() {
@@ -73,71 +90,164 @@ public class RelayWebSocketClient {
 
     public void start(DeviceCredentialState credential) {
         Objects.requireNonNull(credential, "credential must not be null");
-        if (!reconnectLoopActive.compareAndSet(false, true)) {
-            log.debug("relay reconnect loop already active: deviceId={}", credential.getDeviceId());
-            return;
+        long currentGeneration;
+        synchronized (lifecycleMonitor) {
+            if (running) {
+                log.debug("relay reconnect loop already active: deviceId={}", credential.getDeviceId());
+                return;
+            }
+            running = true;
+            connectInFlight = false;
+            reconnectAttempt = 0;
+            state.set(RelayConnectionState.DISCONNECTED);
+            currentGeneration = generation.incrementAndGet();
+            scheduleConnectLocked(credential, currentGeneration, Duration.ZERO);
         }
-        state.set(RelayConnectionState.DISCONNECTED);
-        scheduleConnect(credential, Duration.ZERO);
     }
 
     public void stop() {
-        reconnectLoopActive.set(false);
-        state.set(RelayConnectionState.STOPPED);
-        ScheduledFuture<?> future = reconnectFuture;
-        if (future != null) {
-            future.cancel(false);
+        WebSocket socketToClose;
+        synchronized (lifecycleMonitor) {
+            running = false;
+            generation.incrementAndGet();
+            state.set(RelayConnectionState.STOPPED);
+            connectInFlight = false;
+            reconnectAttempt = 0;
+            cancelFuture(reconnectFuture);
+            cancelFuture(authTimeoutFuture);
+            reconnectFuture = null;
+            authTimeoutFuture = null;
+            socketToClose = webSocket;
+            webSocket = null;
         }
-        WebSocket current = webSocket;
-        if (current != null) {
-            current.sendClose(WebSocket.NORMAL_CLOSURE, "daemon stopped");
+        if (socketToClose != null) {
+            socketToClose.sendClose(WebSocket.NORMAL_CLOSURE, "daemon stopped");
         }
     }
 
-    private void scheduleConnect(DeviceCredentialState credential, Duration delay) {
-        if (!reconnectLoopActive.get()) {
+    private void scheduleConnectLocked(DeviceCredentialState credential, long expectedGeneration, Duration delay) {
+        if (!running || expectedGeneration != generation.get()) {
             return;
         }
-        reconnectFuture = cloudScheduler.schedule(() -> connectOnce(credential),
+        if (reconnectFuture != null && !reconnectFuture.isDone()) {
+            return;
+        }
+        if (!delay.isZero()) {
+            state.set(RelayConnectionState.RECONNECT_WAIT);
+        }
+        reconnectFuture = cloudScheduler.schedule(() -> connectOnce(credential, expectedGeneration),
                 Math.max(0, delay.toMillis()), TimeUnit.MILLISECONDS);
     }
 
-    private void connectOnce(DeviceCredentialState credential) {
-        if (!reconnectLoopActive.get()) {
-            return;
+    private void connectOnce(DeviceCredentialState credential, long expectedGeneration) {
+        synchronized (lifecycleMonitor) {
+            if (!running || expectedGeneration != generation.get() || connectInFlight) {
+                return;
+            }
+            reconnectFuture = null;
+            connectInFlight = true;
+            state.set(RelayConnectionState.CONNECTING);
         }
         try {
-            state.set(RelayConnectionState.CONNECTING);
             RelayTicketResponse ticket = controlPlaneClient.createDeviceRelayTicket(credential);
-            state.set(RelayConnectionState.AUTHENTICATING);
-            RelayListener listener = new RelayListener(credential);
-            httpClient.newWebSocketBuilder()
-                    .buildAsync(URI.create(credential.getRelayUrl()), listener)
-                    .whenComplete((socket, throwable) -> {
-                        if (throwable != null) {
-                            handleDisconnect(credential, throwable);
-                            return;
-                        }
-                        webSocket = socket;
-                        listener.attach(socket);
-                        send(socket, WsEnvelope.of(WsMessageType.HELLO,
-                                new HelloPayload(com.wangbin.ai.agent.contract.protocol.AgentProtocol.VERSION,
-                                        ticket.ticket())));
-                    });
+            synchronized (lifecycleMonitor) {
+                if (!running || expectedGeneration != generation.get()) {
+                    connectInFlight = false;
+                    return;
+                }
+                state.set(RelayConnectionState.AUTHENTICATING);
+            }
+            RelayListener listener = new RelayListener(credential, expectedGeneration);
+            connector.connect(URI.create(credential.getRelayUrl()), listener)
+                    .whenComplete((socket, throwable) -> onConnectResult(credential, expectedGeneration,
+                            listener, ticket, socket, throwable));
         } catch (RuntimeException ex) {
-            handleDisconnect(credential, ex);
+            handleDisconnect(credential, expectedGeneration, null, ex);
         }
     }
 
-    private void handleDisconnect(DeviceCredentialState credential, Throwable throwable) {
-        if (!reconnectLoopActive.get()) {
+    private void onConnectResult(DeviceCredentialState credential, long expectedGeneration, RelayListener listener,
+                                 RelayTicketResponse ticket, WebSocket socket, Throwable throwable) {
+        if (throwable != null) {
+            handleDisconnect(credential, expectedGeneration, null, throwable);
             return;
         }
-        state.set(RelayConnectionState.RECONNECT_WAIT);
-        Duration delay = nextReconnectDelay();
+        synchronized (lifecycleMonitor) {
+            if (!running || expectedGeneration != generation.get()) {
+                connectInFlight = false;
+                socket.sendClose(WebSocket.NORMAL_CLOSURE, "stale relay connection");
+                return;
+            }
+            webSocket = socket;
+            listener.attach(socket);
+            scheduleAuthTimeoutLocked(credential, expectedGeneration, socket);
+        }
+        send(socket, WsEnvelope.of(WsMessageType.HELLO,
+                new HelloPayload(AgentProtocol.VERSION, ticket.ticket())))
+                .whenComplete((ignored, sendError) -> {
+                    if (sendError != null) {
+                        handleDisconnect(credential, expectedGeneration, socket, sendError);
+                    }
+                });
+    }
+
+    private void scheduleAuthTimeoutLocked(DeviceCredentialState credential, long expectedGeneration,
+                                           WebSocket socket) {
+        cancelFuture(authTimeoutFuture);
+        authTimeoutFuture = cloudScheduler.schedule(() -> handleDisconnect(credential, expectedGeneration, socket,
+                        new AgentConnectionException("relay WELCOME timeout", null)),
+                properties.getCloud().getWelcomeTimeout().toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private void handleDisconnect(DeviceCredentialState credential, long expectedGeneration, WebSocket source,
+                                  Throwable throwable) {
+        Duration delay;
+        WebSocket socketToAbort = null;
+        synchronized (lifecycleMonitor) {
+            if (!running || expectedGeneration != generation.get()) {
+                return;
+            }
+            if (source != null && webSocket != null && source != webSocket) {
+                return;
+            }
+            cancelFuture(authTimeoutFuture);
+            authTimeoutFuture = null;
+            if (source != null && source == webSocket) {
+                socketToAbort = webSocket;
+                webSocket = null;
+            }
+            connectInFlight = false;
+            if (reconnectFuture != null && !reconnectFuture.isDone()) {
+                return;
+            }
+            state.set(RelayConnectionState.RECONNECT_WAIT);
+            delay = nextReconnectDelay();
+            scheduleConnectLocked(credential, expectedGeneration, delay);
+        }
+        if (socketToAbort != null) {
+            socketToAbort.abort();
+        }
         log.warn("relay connection disconnected: deviceId={}, state={}, retryDelay={}, reason={}",
                 credential.getDeviceId(), state.get(), delay, throwable.getClass().getSimpleName());
-        scheduleConnect(credential, delay);
+    }
+
+    private void onWelcome(DeviceCredentialState credential, long expectedGeneration, WebSocket source,
+                           WelcomePayload payload) {
+        synchronized (lifecycleMonitor) {
+            if (!running || expectedGeneration != generation.get()) {
+                return;
+            }
+            if (webSocket != null && source != webSocket) {
+                return;
+            }
+            cancelFuture(authTimeoutFuture);
+            authTimeoutFuture = null;
+            connectInFlight = false;
+            reconnectAttempt = 0;
+            state.set(RelayConnectionState.CONNECTED);
+        }
+        log.info("relay authenticated: deviceId={}, connectionId={}, relayNodeId={}, heartbeatInterval={}",
+                credential.getDeviceId(), payload.connectionId(), payload.relayNodeId(), payload.heartbeatInterval());
     }
 
     private Duration nextReconnectDelay() {
@@ -151,14 +261,19 @@ public class RelayWebSocketClient {
         return Duration.ofMillis(Math.min(capped + jitter, max.toMillis()));
     }
 
-    private void send(WebSocket socket, WsEnvelope<?> envelope) {
+    private CompletionStage<WebSocket> send(WebSocket socket, WsEnvelope<?> envelope) {
         try {
-            socket.sendText(objectMapper.writeValueAsString(envelope), true)
-                    .exceptionally(throwable -> {
-                        throw new AgentConnectionException("failed to send relay WebSocket message", throwable);
-                    });
+            return socket.sendText(objectMapper.writeValueAsString(envelope), true);
         } catch (Exception ex) {
-            throw new AgentProtocolException("failed to serialize relay WebSocket message", ex);
+            CompletableFuture<WebSocket> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new AgentProtocolException("failed to serialize relay WebSocket message", ex));
+            return failed;
+        }
+    }
+
+    private void cancelFuture(ScheduledFuture<?> future) {
+        if (future != null) {
+            future.cancel(false);
         }
     }
 
@@ -170,11 +285,13 @@ public class RelayWebSocketClient {
     private final class RelayListener implements WebSocket.Listener {
 
         private final DeviceCredentialState credential;
+        private final long expectedGeneration;
         private final StringBuilder textBuffer = new StringBuilder();
         private WebSocket socket;
 
-        private RelayListener(DeviceCredentialState credential) {
+        private RelayListener(DeviceCredentialState credential, long expectedGeneration) {
             this.credential = credential;
+            this.expectedGeneration = expectedGeneration;
         }
 
         private void attach(WebSocket socket) {
@@ -202,17 +319,14 @@ public class RelayWebSocketClient {
 
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-            RelayConnectionState previous = state.get();
-            if (previous != RelayConnectionState.STOPPED) {
-                handleDisconnect(credential, new AgentConnectionException(
-                        "relay WebSocket closed with status " + statusCode, null));
-            }
+            handleDisconnect(credential, expectedGeneration, webSocket, new AgentConnectionException(
+                    "relay WebSocket closed with status " + statusCode, null));
             return null;
         }
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
-            handleDisconnect(credential, error);
+            handleDisconnect(credential, expectedGeneration, webSocket, error);
         }
 
         private void handleEnvelope(String json) {
@@ -220,17 +334,18 @@ public class RelayWebSocketClient {
                 WsEnvelope<?> envelope = objectMapper.readValue(json, envelopeType(Object.class));
                 if (envelope.type() == WsMessageType.WELCOME) {
                     WsEnvelope<WelcomePayload> welcome = objectMapper.readValue(json, envelopeType(WelcomePayload.class));
-                    reconnectAttempt = 0;
-                    state.set(RelayConnectionState.CONNECTED);
-                    log.info("relay authenticated: deviceId={}, connectionId={}, relayNodeId={}, heartbeatInterval={}",
-                            credential.getDeviceId(), welcome.payload().connectionId(),
-                            welcome.payload().relayNodeId(), welcome.payload().heartbeatInterval());
+                    onWelcome(credential, expectedGeneration, socket, welcome.payload());
                     return;
                 }
                 if (envelope.type() == WsMessageType.PING) {
                     WsEnvelope<PingPayload> ping = objectMapper.readValue(json, envelopeType(PingPayload.class));
                     send(socket, WsEnvelope.of(WsMessageType.PONG,
-                            new PongPayload(ping.payload() == null ? null : ping.payload().pingId(), Instant.now())));
+                            new PongPayload(ping.payload() == null ? null : ping.payload().pingId(), Instant.now())))
+                            .whenComplete((ignored, throwable) -> {
+                                if (throwable != null) {
+                                    handleDisconnect(credential, expectedGeneration, socket, throwable);
+                                }
+                            });
                     return;
                 }
                 if (envelope.type() == WsMessageType.PONG) {
@@ -238,7 +353,8 @@ public class RelayWebSocketClient {
                 }
                 log.debug("ignored relay message before AgentEvent uplink is enabled: type={}", envelope.type());
             } catch (Exception ex) {
-                throw new AgentProtocolException("failed to parse relay WebSocket message", ex);
+                handleDisconnect(credential, expectedGeneration, socket,
+                        new AgentProtocolException("failed to parse relay WebSocket message", ex));
             }
         }
 

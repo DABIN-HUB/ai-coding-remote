@@ -14,7 +14,9 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.lang.reflect.Field;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,7 +47,22 @@ class InMemoryConnectionManagerTest {
 
         ConnectionContext a = manager.findByConnectionId("conn-a").orElseThrow();
         ConnectionContext b = manager.findByConnectionId("conn-b").orElseThrow();
-        assertThat(a.outboundQueue()).isNotSameAs(b.outboundQueue());
+        assertThat(a.outboundChannel()).isNotSameAs(b.outboundChannel());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deviceConnectionReplacementDoesNotLeaveStaleUserRouteIds() throws Exception {
+        InMemoryConnectionManager manager = new InMemoryConnectionManager(new AgentRelayProperties());
+
+        for (int i = 1; i <= 5; i++) {
+            manager.register(new ConnectionRegistration(descriptor("conn-" + i), mockSession())).block();
+        }
+
+        Field field = InMemoryConnectionManager.class.getDeclaredField("userToConnectionIds");
+        field.setAccessible(true);
+        Map<Long, Set<String>> userRoutes = (Map<Long, Set<String>>) field.get(manager);
+        assertThat(userRoutes.get(11L)).containsExactly("conn-5");
     }
 
     private ConnectionDescriptor descriptor(String connectionId) {

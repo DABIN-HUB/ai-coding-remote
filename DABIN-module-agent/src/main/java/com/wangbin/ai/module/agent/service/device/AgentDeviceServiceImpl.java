@@ -1,5 +1,6 @@
 package com.wangbin.ai.module.agent.service.device;
 
+import com.wangbin.ai.agent.contract.coordination.AgentCoordinationKeys;
 import com.wangbin.ai.agent.contract.coordination.DevicePresencePayload;
 import com.wangbin.ai.agent.contract.coordination.PairingCodePayload;
 import com.wangbin.ai.agent.contract.coordination.RelayTicketPayload;
@@ -12,9 +13,12 @@ import com.wangbin.ai.module.agent.dal.mysql.device.AgentDeviceCredentialMapper;
 import com.wangbin.ai.module.agent.dal.mysql.device.AgentDeviceMapper;
 import com.wangbin.ai.module.agent.enums.CredentialStatus;
 import com.wangbin.ai.module.agent.enums.DeviceStatus;
+import com.wangbin.ai.module.agent.framework.config.AgentControlPlaneProperties;
 import com.wangbin.ai.module.agent.service.pairing.PairingCodeService;
 import com.wangbin.ai.module.agent.service.relay.RelayTicketService;
 import lombok.RequiredArgsConstructor;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,7 +27,7 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.List;
-import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static com.wangbin.ai.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.wangbin.ai.module.agent.enums.ErrorCodeConstants.*;
@@ -41,6 +45,8 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
     private final RelayTicketService relayTicketService;
     private final DevicePresenceService presenceService;
     private final PasswordEncoder passwordEncoder;
+    private final RedissonClient redissonClient;
+    private final AgentControlPlaneProperties properties;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Override
@@ -71,33 +77,55 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
         PairingCodePayload payload = pairingCodeService.consumePairingCode(reqVO.getPairingCode());
         Long oldTenantId = TenantContextHolder.getTenantId();
         TenantContextHolder.setTenantId(payload.tenantId());
+        RLock lock = redissonClient.getLock(AgentCoordinationKeys.pairingLock(payload.tenantId(), payload.userId(),
+                reqVO.getInstallationId()));
+        boolean locked = false;
         try {
-            AgentDeviceDO device = findReusableDevice(payload.userId(), reqVO.getInstallationId());
-            if (device == null) {
-                device = createDevice(payload, reqVO);
-                deviceMapper.insert(device);
-            } else {
-                updateDeviceMetadata(device, reqVO);
-                deviceMapper.updateById(device);
-                revokeActiveCredentials(device.getId(), payload.userId());
+            locked = lock.tryLock(properties.getPairingLockWaitTime().toMillis(),
+                    properties.getPairingLockLeaseTime().toMillis(), TimeUnit.MILLISECONDS);
+            if (!locked) {
+                throw exception(PAIRING_CONCURRENT_CONFLICT);
             }
-            String credentialSecret = randomSecret();
-            AgentDeviceCredentialDO credential = createCredential(device, credentialSecret, payload.userId());
-            credentialMapper.insert(credential);
-
-            AgentDevicePairRespVO respVO = new AgentDevicePairRespVO();
-            respVO.setTenantId(payload.tenantId());
-            respVO.setDeviceId(device.getDeviceId());
-            respVO.setCredentialId(credential.getCredentialId());
-            respVO.setCredentialSecret(credentialSecret);
-            return respVO;
+            return pairDeviceUnderLock(payload, reqVO);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw exception(PAIRING_CONCURRENT_CONFLICT);
         } finally {
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
             if (oldTenantId == null) {
                 TenantContextHolder.clear();
             } else {
                 TenantContextHolder.setTenantId(oldTenantId);
             }
         }
+    }
+
+    /**
+     * The distributed lock protects the read-update-write sequence because the
+     * first Phase 2A DDL intentionally does not create a unique installation index.
+     */
+    private AgentDevicePairRespVO pairDeviceUnderLock(PairingCodePayload payload, AgentDevicePairReqVO reqVO) {
+        AgentDeviceDO device = findReusableDevice(payload.userId(), reqVO.getInstallationId());
+        if (device == null) {
+            device = createDevice(payload, reqVO);
+            deviceMapper.insert(device);
+        } else {
+            updateDeviceMetadata(device, reqVO);
+            deviceMapper.updateById(device);
+            revokeActiveCredentials(device.getId(), payload.userId());
+        }
+        String credentialSecret = randomSecret();
+        AgentDeviceCredentialDO credential = createCredential(device, credentialSecret, payload.userId());
+        credentialMapper.insert(credential);
+
+        AgentDevicePairRespVO respVO = new AgentDevicePairRespVO();
+        respVO.setTenantId(payload.tenantId());
+        respVO.setDeviceId(device.getDeviceId());
+        respVO.setCredentialId(credential.getCredentialId());
+        respVO.setCredentialSecret(credentialSecret);
+        return respVO;
     }
 
     @Override
