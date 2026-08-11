@@ -23,9 +23,6 @@ public class AgentControlPlaneProperties {
     @NotNull
     private Duration pairingLockWaitTime = Duration.ofSeconds(3);
 
-    @NotNull
-    private Duration pairingLockLeaseTime = Duration.ofSeconds(30);
-
     public Duration getPairingCodeTtl() {
         return pairingCodeTtl;
     }
@@ -56,13 +53,5 @@ public class AgentControlPlaneProperties {
 
     public void setPairingLockWaitTime(Duration pairingLockWaitTime) {
         this.pairingLockWaitTime = pairingLockWaitTime;
-    }
-
-    public Duration getPairingLockLeaseTime() {
-        return pairingLockLeaseTime;
-    }
-
-    public void setPairingLockLeaseTime(Duration pairingLockLeaseTime) {
-        this.pairingLockLeaseTime = pairingLockLeaseTime;
     }
 }

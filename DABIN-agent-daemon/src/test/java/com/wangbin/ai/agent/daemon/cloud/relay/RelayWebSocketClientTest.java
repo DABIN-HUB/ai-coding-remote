@@ -17,14 +17,19 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.net.http.WebSocket;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -50,11 +55,10 @@ class RelayWebSocketClientTest {
 
         client.start(credential());
         waitUntil(() -> connector.connectCount.get() == 1);
-        WebSocket.Listener listener = connector.listener.get();
-        FakeWebSocket socket = connector.socket.get();
+        Attempt firstAttempt = connector.attempt(0);
 
-        listener.onError(socket, new RuntimeException("network"));
-        listener.onClose(socket, 1006, "closed");
+        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
+        firstAttempt.listener().onClose(firstAttempt.socket(), 1006, "closed");
 
         waitUntil(() -> connector.connectCount.get() == 2);
         assertThat(controlPlaneClient.ticketCount.get()).isEqualTo(2);
@@ -87,18 +91,98 @@ class RelayWebSocketClientTest {
 
         client.start(credential());
         waitUntil(() -> controlPlaneClient.ticketCount.get() >= 2);
-        WebSocket.Listener listener = connector.listener.get();
-        FakeWebSocket socket = connector.socket.get();
+        Attempt latestAttempt = connector.latestAttempt();
         String welcome = objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.WELCOME,
                 new WelcomePayload("conn-1", "relay-1", Duration.ofSeconds(20), Instant.now())));
 
-        listener.onText(socket, welcome, true);
+        latestAttempt.listener().onText(latestAttempt.socket(), welcome, true);
         waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
         int ticketCountAfterWelcome = controlPlaneClient.ticketCount.get();
         sleep(properties.getCloud().getWelcomeTimeout().multipliedBy(2));
 
         assertThat(controlPlaneClient.ticketCount.get()).isEqualTo(ticketCountAfterWelcome);
         client.stop();
+    }
+
+    @Test
+    void staleCloseAfterNextAttemptStartedDoesNotCreateThirdAttemptOrClearInFlight() throws Exception {
+        AgentDaemonProperties properties = properties();
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+        FakeConnector connector = new FakeConnector(false);
+        RelayWebSocketClient client = new RelayWebSocketClient(objectMapper, properties,
+                controlPlaneClient, scheduler, connector);
+
+        client.start(credential());
+        waitUntil(() -> connector.connectCount.get() == 1);
+        Attempt firstAttempt = connector.attempt(0);
+        connector.completeConnectImmediately.set(false);
+        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
+        waitUntil(() -> connector.connectCount.get() == 2 && controlPlaneClient.ticketCount.get() == 2);
+
+        firstAttempt.listener().onClose(firstAttempt.socket(), 1006, "late close");
+        sleep(properties.getCloud().getReconnectInitialDelay().multipliedBy(3));
+
+        assertThat(connector.connectCount.get()).isEqualTo(2);
+        assertThat(connectInFlight(client)).isTrue();
+        client.stop();
+    }
+
+    @Test
+    void staleAttemptCallbacksAreIgnoredAfterNewAttemptConnected() throws Exception {
+        AgentDaemonProperties properties = properties();
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+        FakeConnector connector = new FakeConnector(false);
+        RelayWebSocketClient client = new RelayWebSocketClient(objectMapper, properties,
+                controlPlaneClient, scheduler, connector);
+
+        client.start(credential());
+        waitUntil(() -> connector.connectCount.get() == 1);
+        Attempt firstAttempt = connector.attempt(0);
+        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
+        waitUntil(() -> connector.connectCount.get() == 2);
+        sendWelcome(connector.latestAttempt(), "conn-2");
+        waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
+        int ticketCountAfterConnected = controlPlaneClient.ticketCount.get();
+
+        sendWelcome(firstAttempt, "stale");
+        firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("stale error"));
+        firstAttempt.listener().onClose(firstAttempt.socket(), 1006, "stale close");
+        sleep(properties.getCloud().getReconnectInitialDelay().multipliedBy(3));
+
+        assertThat(client.state()).isEqualTo(RelayConnectionState.CONNECTED);
+        assertThat(controlPlaneClient.ticketCount.get()).isEqualTo(ticketCountAfterConnected);
+        client.stop();
+    }
+
+    @Test
+    void staleWelcomeTimeoutDoesNotDisconnectNewConnectedAttempt() throws Exception {
+        AgentDaemonProperties properties = properties();
+        properties.getCloud().setWelcomeTimeout(Duration.ofSeconds(5));
+        CaptureScheduledExecutor captureScheduler = new CaptureScheduledExecutor(properties.getCloud().getWelcomeTimeout());
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+        FakeConnector connector = new FakeConnector(false);
+        RelayWebSocketClient client = new RelayWebSocketClient(objectMapper, properties,
+                controlPlaneClient, captureScheduler, connector);
+        try {
+            client.start(credential());
+            waitUntil(() -> connector.connectCount.get() == 1);
+            Runnable firstAuthTimeout = captureScheduler.latestAuthTimeout.get();
+            Attempt firstAttempt = connector.attempt(0);
+            firstAttempt.listener().onError(firstAttempt.socket(), new RuntimeException("network"));
+            waitUntil(() -> connector.connectCount.get() == 2);
+            sendWelcome(connector.latestAttempt(), "conn-2");
+            waitUntil(() -> client.state() == RelayConnectionState.CONNECTED);
+            int ticketCountAfterConnected = controlPlaneClient.ticketCount.get();
+
+            firstAuthTimeout.run();
+            sleep(properties.getCloud().getReconnectInitialDelay().multipliedBy(2));
+
+            assertThat(client.state()).isEqualTo(RelayConnectionState.CONNECTED);
+            assertThat(controlPlaneClient.ticketCount.get()).isEqualTo(ticketCountAfterConnected);
+        } finally {
+            client.stop();
+            captureScheduler.shutdownNow();
+        }
     }
 
     private AgentDaemonProperties properties() {
@@ -139,6 +223,18 @@ class RelayWebSocketClientTest {
         }
     }
 
+    private void sendWelcome(Attempt attempt, String connectionId) throws Exception {
+        String welcome = objectMapper.writeValueAsString(WsEnvelope.of(WsMessageType.WELCOME,
+                new WelcomePayload(connectionId, "relay-1", Duration.ofSeconds(20), Instant.now())));
+        attempt.listener().onText(attempt.socket(), welcome, true);
+    }
+
+    private boolean connectInFlight(RelayWebSocketClient client) throws Exception {
+        Field field = RelayWebSocketClient.class.getDeclaredField("connectInFlight");
+        field.setAccessible(true);
+        return field.getBoolean(client);
+    }
+
     @FunctionalInterface
     private interface BooleanCondition {
 
@@ -166,8 +262,8 @@ class RelayWebSocketClientTest {
 
         private final boolean failSend;
         private final AtomicInteger connectCount = new AtomicInteger();
-        private final AtomicReference<WebSocket.Listener> listener = new AtomicReference<>();
-        private final AtomicReference<FakeWebSocket> socket = new AtomicReference<>();
+        private final AtomicBoolean completeConnectImmediately = new AtomicBoolean(true);
+        private final List<Attempt> attempts = new CopyOnWriteArrayList<>();
 
         private FakeConnector(boolean failSend) {
             this.failSend = failSend;
@@ -175,12 +271,46 @@ class RelayWebSocketClientTest {
 
         @Override
         public CompletableFuture<WebSocket> connect(URI relayUri, WebSocket.Listener webSocketListener) {
-            connectCount.incrementAndGet();
+            int attemptNumber = connectCount.incrementAndGet();
             FakeWebSocket fakeWebSocket = new FakeWebSocket(failSend);
-            listener.set(webSocketListener);
-            socket.set(fakeWebSocket);
+            CompletableFuture<WebSocket> future = new CompletableFuture<>();
+            attempts.add(new Attempt(attemptNumber, webSocketListener, fakeWebSocket, future));
             webSocketListener.onOpen(fakeWebSocket);
-            return CompletableFuture.completedFuture(fakeWebSocket);
+            if (completeConnectImmediately.get()) {
+                future.complete(fakeWebSocket);
+            }
+            return future;
+        }
+
+        private Attempt attempt(int index) {
+            return attempts.get(index);
+        }
+
+        private Attempt latestAttempt() {
+            return attempts.get(attempts.size() - 1);
+        }
+    }
+
+    private record Attempt(int attemptNumber, WebSocket.Listener listener, FakeWebSocket socket,
+                           CompletableFuture<WebSocket> future) {
+    }
+
+    private static final class CaptureScheduledExecutor extends ScheduledThreadPoolExecutor {
+
+        private final Duration authTimeoutDelay;
+        private final AtomicReference<Runnable> latestAuthTimeout = new AtomicReference<>();
+
+        private CaptureScheduledExecutor(Duration authTimeoutDelay) {
+            super(1);
+            this.authTimeoutDelay = authTimeoutDelay;
+        }
+
+        @Override
+        public java.util.concurrent.ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            if (unit.toMillis(delay) == authTimeoutDelay.toMillis()) {
+                latestAuthTimeout.set(command);
+            }
+            return super.schedule(command, delay, unit);
         }
     }
 

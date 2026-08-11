@@ -22,11 +22,13 @@ import org.redisson.api.RedissonClient;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 import static com.wangbin.ai.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -47,6 +49,7 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
     private final PasswordEncoder passwordEncoder;
     private final RedissonClient redissonClient;
     private final AgentControlPlaneProperties properties;
+    private final TransactionTemplate transactionTemplate;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Override
@@ -72,7 +75,6 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public AgentDevicePairRespVO pairDevice(AgentDevicePairReqVO reqVO) {
         PairingCodePayload payload = pairingCodeService.consumePairingCode(reqVO.getPairingCode());
         Long oldTenantId = TenantContextHolder.getTenantId();
@@ -81,12 +83,11 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
                 reqVO.getInstallationId()));
         boolean locked = false;
         try {
-            locked = lock.tryLock(properties.getPairingLockWaitTime().toMillis(),
-                    properties.getPairingLockLeaseTime().toMillis(), TimeUnit.MILLISECONDS);
+            locked = lock.tryLock(properties.getPairingLockWaitTime().toMillis(), TimeUnit.MILLISECONDS);
             if (!locked) {
                 throw exception(PAIRING_CONCURRENT_CONFLICT);
             }
-            return pairDeviceUnderLock(payload, reqVO);
+            return Objects.requireNonNull(transactionTemplate.execute(status -> pairDeviceUnderLock(payload, reqVO)));
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw exception(PAIRING_CONCURRENT_CONFLICT);
@@ -103,8 +104,9 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
     }
 
     /**
-     * The distributed lock protects the read-update-write sequence because the
-     * first Phase 2A DDL intentionally does not create a unique installation index.
+     * The transaction is opened only after the distributed lock is acquired.
+     * Without a unique installation index, the lock must cover the database commit
+     * so the next pairing request can observe the already-created device.
      */
     private AgentDevicePairRespVO pairDeviceUnderLock(PairingCodePayload payload, AgentDevicePairReqVO reqVO) {
         AgentDeviceDO device = findReusableDevice(payload.userId(), reqVO.getInstallationId());
