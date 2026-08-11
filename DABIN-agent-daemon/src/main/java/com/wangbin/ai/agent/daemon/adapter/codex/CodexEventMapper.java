@@ -1,8 +1,6 @@
 package com.wangbin.ai.agent.daemon.adapter.codex;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.event.*;
@@ -12,17 +10,12 @@ import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 @Component
 public class CodexEventMapper {
-
-    private final ObjectMapper objectMapper;
-
-    public CodexEventMapper(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
 
     public List<AgentEvent> map(CodexRpcMessage message, CodexSessionContext context) {
         if (context == null) {
@@ -33,16 +26,15 @@ public class CodexEventMapper {
                 return List.of();
             }
             return List.of(event(context, AgentEventType.PERMISSION_REQUIRED,
-                    new PermissionRequiredPayload(message.id(), message.method(), "Codex requested user approval",
-                            toMap(message.params()), extensions(message))));
+                    new PermissionRequiredPayload(message.idText(), message.method(), "Codex requested user approval",
+                            safePermissionRequest(message.params()), extensions(message))));
         }
         if (message.kind() != CodexRpcMessageKind.NOTIFICATION) {
             return List.of();
         }
         JsonNode params = message.params();
         return switch (message.method()) {
-            case CodexProtocolConstants.METHOD_THREAD_STARTED -> List.of(event(context, AgentEventType.SESSION_STARTED,
-                    new SessionPayload(context.nativeSessionId(), AgentSessionStatus.RUNNING, null, extensions(message))));
+            case CodexProtocolConstants.METHOD_THREAD_STARTED -> List.of();
             case CodexProtocolConstants.METHOD_THREAD_STATUS_CHANGED -> List.of(event(context, AgentEventType.SESSION_STATE_CHANGED,
                     new SessionPayload(context.nativeSessionId(), mapThreadStatus(params), null, extensions(message))));
             case CodexProtocolConstants.METHOD_TURN_STARTED -> List.of(event(context, AgentEventType.SESSION_STATE_CHANGED,
@@ -70,11 +62,12 @@ public class CodexEventMapper {
             case CodexProtocolConstants.METHOD_DIFF_UPDATED -> List.of(event(context, AgentEventType.DIFF_UPDATED,
                     new DiffUpdatedPayload(text(params, "diff"), extensions(message))));
             case CodexProtocolConstants.METHOD_ERROR -> List.of(event(context, AgentEventType.ERROR,
-                    new AgentErrorPayload("codex_error", params == null ? "Codex error" : params.toString(),
+                    new AgentErrorPayload(errorCode(params), errorMessage(params),
                             params != null && params.path("willRetry").asBoolean(false), extensions(message))));
             case CodexProtocolConstants.METHOD_WARNING, CodexProtocolConstants.METHOD_GUARDIAN_WARNING,
                     CodexProtocolConstants.METHOD_CONFIG_WARNING -> List.of(event(context, AgentEventType.WARNING,
-                    new WarningPayload(text(params, "message"), extensions(message))));
+                    new WarningPayload(firstNonBlank(text(params, "message", "msg"), "Codex warning"),
+                            extensions(message))));
             default -> List.of();
         };
     }
@@ -128,11 +121,11 @@ public class CodexEventMapper {
 
     private AgentEvent event(CodexSessionContext context, AgentEventType type, AgentEventPayload payload) {
         return AgentEvent.of(null, context.tenantId(), context.userId(), context.deviceId(), context.projectId(),
-                context.platformSessionId(), context.nextSeq(), context.agentType(), type, payload);
+                context.platformSessionId(), 0, context.agentType(), type, payload);
     }
 
     private AgentSessionStatus mapThreadStatus(JsonNode params) {
-        String status = text(params.path("status"), "type");
+        String status = text(params == null ? null : params.path("status"), "type");
         if ("active".equals(status)) {
             return AgentSessionStatus.RUNNING;
         }
@@ -158,22 +151,50 @@ public class CodexEventMapper {
     }
 
     private Map<String, Object> extensions(CodexRpcMessage message) {
-        return Map.of("nativeMethod", message.method());
+        Map<String, Object> extensions = new LinkedHashMap<>();
+        putIfPresent(extensions, "nativeMethod", message.method());
+        return Map.copyOf(extensions);
     }
 
     private Map<String, Object> extensions(CodexRpcMessage message, JsonNode item) {
-        if (item == null || item.isNull()) {
-            return extensions(message);
-        }
-        return Map.of("nativeMethod", message.method(), "nativeItem", toMap(item));
+        Map<String, Object> extensions = new LinkedHashMap<>();
+        putIfPresent(extensions, "nativeMethod", message.method());
+        putIfPresent(extensions, "nativeItemId", text(item, "id"));
+        putIfPresent(extensions, "nativeItemType", text(item, "type"));
+        putIfPresent(extensions, "nativePhase", text(item, "phase"));
+        putIfPresent(extensions, "nativeStatus", text(item, "status"));
+        return Map.copyOf(extensions);
     }
 
-    private Map<String, Object> toMap(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return Map.of();
+    private Map<String, Object> safePermissionRequest(JsonNode params) {
+        Map<String, Object> request = new LinkedHashMap<>();
+        putIfPresent(request, "threadId", text(params, "threadId"));
+        putIfPresent(request, "turnId", text(params, "turnId"));
+        putIfPresent(request, "itemId", text(params, "itemId"));
+        putIfPresent(request, "permission", text(params, "permission"));
+        putIfPresent(request, "reason", text(params, "reason"));
+        putIfPresent(request, "title", text(params, "title"));
+        putIfPresent(request, "action", text(params, "action"));
+        putIfPresent(request, "status", text(params, "status"));
+        return Map.copyOf(request);
+    }
+
+    private String errorCode(JsonNode params) {
+        return firstNonBlank(text(params, "code", "type"), "codex_error");
+    }
+
+    private String errorMessage(JsonNode params) {
+        return firstNonBlank(text(params, "message", "msg", "additionalDetails"), "Codex error");
+    }
+
+    private String firstNonBlank(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private void putIfPresent(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
         }
-        return objectMapper.convertValue(node, new TypeReference<>() {
-        });
     }
 
     private String text(JsonNode node, String... fields) {

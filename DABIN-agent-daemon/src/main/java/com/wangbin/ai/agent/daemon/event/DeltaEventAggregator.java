@@ -69,7 +69,7 @@ public class DeltaEventAggregator {
             flushed.add(copyWithSeq(event, sequenceSupplier.getAsLong()));
             return flushed;
         }
-        return List.of(event);
+        return List.of(copyWithSeq(event, sequenceSupplier.getAsLong()));
     }
 
     public synchronized List<AgentEvent> flushSession(String sessionId, LongSupplier sequenceSupplier,

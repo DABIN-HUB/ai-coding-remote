@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcProtocolIssue;
-import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
 import reactor.core.publisher.Flux;
@@ -54,10 +53,11 @@ public class CodexJsonRpcClient implements AutoCloseable {
 
     public CompletableFuture<JsonNode> request(String method, Object params) {
         String requestId = Long.toString(requestSequence.incrementAndGet());
+        JsonNode requestIdNode = objectMapper.getNodeFactory().textNode(requestId);
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
-        pendingRequests.put(requestId, future);
-        ObjectNode request = jsonRpcObject();
-        request.put("id", requestId);
+        pendingRequests.put(idKey(requestIdNode), future);
+        ObjectNode request = messageObject();
+        request.set("id", requestIdNode);
         request.put("method", method);
         if (params != null) {
             request.set("params", objectMapper.valueToTree(params));
@@ -65,17 +65,17 @@ public class CodexJsonRpcClient implements AutoCloseable {
         try {
             writeJson(request);
         } catch (RuntimeException ex) {
-            pendingRequests.remove(requestId);
+            pendingRequests.remove(idKey(requestIdNode));
             future.completeExceptionally(ex);
             throw ex;
         }
         future.orTimeout(requestTimeout.toMillis(), TimeUnit.MILLISECONDS)
-                .whenComplete((ignored, throwable) -> pendingRequests.remove(requestId));
+                .whenComplete((ignored, throwable) -> pendingRequests.remove(idKey(requestIdNode)));
         return future;
     }
 
     public void notify(String method, Object params) {
-        ObjectNode notification = jsonRpcObject();
+        ObjectNode notification = messageObject();
         notification.put("method", method);
         if (params != null) {
             notification.set("params", objectMapper.valueToTree(params));
@@ -83,16 +83,16 @@ public class CodexJsonRpcClient implements AutoCloseable {
         writeJson(notification);
     }
 
-    public void respond(String id, Object result) {
-        ObjectNode response = jsonRpcObject();
-        response.put("id", id);
+    public void respond(JsonNode id, Object result) {
+        ObjectNode response = messageObject();
+        response.set("id", id == null ? objectMapper.nullNode() : id.deepCopy());
         response.set("result", objectMapper.valueToTree(result == null ? Map.of() : result));
         writeJson(response);
     }
 
-    public void respondError(String id, int code, String message) {
-        ObjectNode response = jsonRpcObject();
-        response.put("id", id);
+    public void respondError(JsonNode id, int code, String message) {
+        ObjectNode response = messageObject();
+        response.set("id", id == null ? objectMapper.nullNode() : id.deepCopy());
         ObjectNode error = objectMapper.createObjectNode();
         error.put("code", code);
         error.put("message", message);
@@ -127,7 +127,7 @@ public class CodexJsonRpcClient implements AutoCloseable {
         try {
             JsonNode node = objectMapper.readTree(line);
             JsonNode idNode = node.get("id");
-            String id = idNode == null || idNode.isNull() ? null : idNode.asText();
+            JsonNode id = idNode == null || idNode.isNull() ? null : idNode.deepCopy();
             JsonNode methodNode = node.get("method");
             String method = methodNode == null || methodNode.isNull() ? null : methodNode.asText();
             if (id != null && method != null) {
@@ -173,8 +173,8 @@ public class CodexJsonRpcClient implements AutoCloseable {
         }
     }
 
-    private void completeResponse(String id, JsonNode result) {
-        CompletableFuture<JsonNode> future = pendingRequests.remove(id);
+    private void completeResponse(JsonNode id, JsonNode result) {
+        CompletableFuture<JsonNode> future = pendingRequests.remove(idKey(id));
         if (future == null) {
             emitIssue("unknown_response", "response id has no pending request: " + id, null);
             return;
@@ -182,8 +182,8 @@ public class CodexJsonRpcClient implements AutoCloseable {
         future.complete(result);
     }
 
-    private void completeError(String id, JsonNode error) {
-        CompletableFuture<JsonNode> future = pendingRequests.remove(id);
+    private void completeError(JsonNode id, JsonNode error) {
+        CompletableFuture<JsonNode> future = pendingRequests.remove(idKey(id));
         if (future == null) {
             emitIssue("unknown_error_response", "error response id has no pending request: " + id, null);
             return;
@@ -213,10 +213,12 @@ public class CodexJsonRpcClient implements AutoCloseable {
         }
     }
 
-    private ObjectNode jsonRpcObject() {
-        ObjectNode node = objectMapper.createObjectNode();
-        node.put("jsonrpc", CodexProtocolConstants.JSON_RPC_VERSION);
-        return node;
+    private ObjectNode messageObject() {
+        return objectMapper.createObjectNode();
+    }
+
+    private String idKey(JsonNode id) {
+        return id == null || id.isNull() ? "null" : id.toString();
     }
 
 }

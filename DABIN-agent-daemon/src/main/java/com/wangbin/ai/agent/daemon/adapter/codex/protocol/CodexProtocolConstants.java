@@ -6,7 +6,6 @@ public final class CodexProtocolConstants {
 
     public static final String METHOD_INITIALIZE = "initialize";
     public static final String METHOD_INITIALIZED = "initialized";
-    public static final String JSON_RPC_VERSION = "2.0";
     public static final String METHOD_THREAD_START = "thread/start";
     public static final String METHOD_TURN_START = "turn/start";
     public static final String METHOD_TURN_INTERRUPT = "turn/interrupt";

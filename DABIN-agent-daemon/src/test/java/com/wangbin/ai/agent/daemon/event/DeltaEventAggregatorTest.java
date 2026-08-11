@@ -138,10 +138,60 @@ class DeltaEventAggregatorTest {
         }
     }
 
+    @Test
+    void assignsContinuousSequenceOnlyToActuallyEmittedEventsPerSession() {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        properties.setEventAggregationMaxChars(100);
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
+        AtomicLong sessionASequence = new AtomicLong();
+        AtomicLong sessionBSequence = new AtomicLong();
+
+        try {
+            assertThat(aggregator.accept(delta("a", "session-a", "msg-a"), sessionASequence::incrementAndGet,
+                    ignored -> {
+                    })).isEmpty();
+            List<AgentEvent> sessionAStarted = aggregator.accept(sessionState("session-a"),
+                    sessionASequence::incrementAndGet, ignored -> {
+                    });
+            assertThat(aggregator.accept(delta("b", "session-a", "msg-a"), sessionASequence::incrementAndGet,
+                    ignored -> {
+                    })).isEmpty();
+            List<AgentEvent> sessionAFinal = aggregator.accept(finalMessage("ab", "session-a", "msg-a"),
+                    sessionASequence::incrementAndGet, ignored -> {
+                    });
+            List<AgentEvent> sessionAIdle = aggregator.accept(idle("session-a"), sessionASequence::incrementAndGet,
+                    ignored -> {
+                    });
+
+            List<AgentEvent> sessionBFinal = aggregator.accept(finalMessage("done", "session-b", "msg-b"),
+                    sessionBSequence::incrementAndGet, ignored -> {
+                    });
+            List<AgentEvent> sessionBIdle = aggregator.accept(idle("session-b"), sessionBSequence::incrementAndGet,
+                    ignored -> {
+                    });
+
+            assertThat(concat(sessionAStarted, sessionAFinal, sessionAIdle))
+                    .extracting(AgentEvent::seq)
+                    .containsExactly(1L, 2L, 3L, 4L);
+            assertThat(concat(sessionBFinal, sessionBIdle))
+                    .extracting(AgentEvent::seq)
+                    .containsExactly(1L, 2L);
+        } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
     private AgentEvent delta(String content, long seq) {
         return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
                 "session-1", seq, AgentType.CODEX, AgentEventType.AGENT_MESSAGE_DELTA, null, null,
                 new AgentMessagePayload("msg-1", "assistant", content, true, Map.of()), Map.of());
+    }
+
+    private AgentEvent delta(String content, String sessionId, String messageId) {
+        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+                sessionId, 0, AgentType.CODEX, AgentEventType.AGENT_MESSAGE_DELTA, null, null,
+                new AgentMessagePayload(messageId, "assistant", content, true, Map.of()), Map.of());
     }
 
     private AgentEvent finalMessage(String content, long seq) {
@@ -150,10 +200,35 @@ class DeltaEventAggregatorTest {
                 new AgentMessagePayload("msg-1", "assistant", content, false, Map.of()), Map.of());
     }
 
+    private AgentEvent finalMessage(String content, String sessionId, String messageId) {
+        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+                sessionId, 0, AgentType.CODEX, AgentEventType.AGENT_MESSAGE, null, null,
+                new AgentMessagePayload(messageId, "assistant", content, false, Map.of()), Map.of());
+    }
+
+    private AgentEvent sessionState(String sessionId) {
+        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+                sessionId, 0, AgentType.CODEX, AgentEventType.SESSION_STATE_CHANGED, null, null,
+                new SessionPayload("native-1", AgentSessionStatus.RUNNING, null, Map.of()), Map.of());
+    }
+
     private AgentEvent idle() {
         return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
                 "session-1", 99, AgentType.CODEX, AgentEventType.SESSION_IDLE, null, null,
                 new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()), Map.of());
+    }
+
+    private AgentEvent idle(String sessionId) {
+        return new AgentEvent(null, "trace-1", 1L, 11L, "device-1", "project-1",
+                sessionId, 0, AgentType.CODEX, AgentEventType.SESSION_IDLE, null, null,
+                new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()), Map.of());
+    }
+
+    @SafeVarargs
+    private final List<AgentEvent> concat(List<AgentEvent>... parts) {
+        return java.util.Arrays.stream(parts)
+                .flatMap(List::stream)
+                .toList();
     }
 
 }

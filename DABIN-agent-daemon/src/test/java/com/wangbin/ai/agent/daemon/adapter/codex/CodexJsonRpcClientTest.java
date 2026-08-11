@@ -38,7 +38,7 @@ class CodexJsonRpcClientTest {
 
         var future = client.request("initialize", objectMapper.createObjectNode().put("client", "test"));
         JsonNode request = objectMapper.readTree(writer.toString().trim());
-        assertThat(request.get("jsonrpc").asText()).isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
+        assertThat(request.has("jsonrpc")).isFalse();
 
         client.handleLine("{\"id\":\"" + request.get("id").asText() + "\",\"result\":{\"ok\":true}}");
 
@@ -46,23 +46,22 @@ class CodexJsonRpcClientTest {
     }
 
     @Test
-    void writesJsonRpcVersionForNotificationsAndServerResponses() throws Exception {
+    void omitsJsonRpcHeaderForNotificationsAndServerResponses() throws Exception {
         StringWriter writer = new StringWriter();
         CodexJsonRpcClient client = new CodexJsonRpcClient(objectMapper, null, writer, executor,
                 Duration.ofSeconds(5));
 
         client.notify(CodexProtocolConstants.METHOD_INITIALIZED, null);
-        client.respond("server-1", objectMapper.createObjectNode().put("ok", true));
-        client.respondError("server-2", CodexProtocolConstants.JSON_RPC_METHOD_NOT_FOUND, "unsupported");
+        client.respond(objectMapper.getNodeFactory().textNode("server-1"),
+                objectMapper.createObjectNode().put("ok", true));
+        client.respondError(objectMapper.getNodeFactory().textNode("server-2"),
+                CodexProtocolConstants.JSON_RPC_METHOD_NOT_FOUND, "unsupported");
 
         String[] lines = writer.toString().trim().split("\\R");
         assertThat(lines).hasSize(3);
-        assertThat(objectMapper.readTree(lines[0]).get("jsonrpc").asText())
-                .isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
-        assertThat(objectMapper.readTree(lines[1]).get("jsonrpc").asText())
-                .isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
-        assertThat(objectMapper.readTree(lines[2]).get("jsonrpc").asText())
-                .isEqualTo(CodexProtocolConstants.JSON_RPC_VERSION);
+        assertThat(objectMapper.readTree(lines[0]).has("jsonrpc")).isFalse();
+        assertThat(objectMapper.readTree(lines[1]).has("jsonrpc")).isFalse();
+        assertThat(objectMapper.readTree(lines[2]).has("jsonrpc")).isFalse();
     }
 
     @Test
@@ -92,8 +91,41 @@ class CodexJsonRpcClientTest {
 
         assertThat(messages).hasSize(1);
         assertThat(messages.getFirst().kind()).isEqualTo(CodexRpcMessageKind.SERVER_REQUEST);
-        assertThat(messages.getFirst().id()).isEqualTo("approval-1");
+        assertThat(messages.getFirst().idText()).isEqualTo("approval-1");
         assertThat(messages.getFirst().method()).isEqualTo("item/permissions/requestApproval");
+    }
+
+    @Test
+    void preservesNumericServerRequestIdWhenResponding() throws Exception {
+        StringWriter writer = new StringWriter();
+        CodexJsonRpcClient client = new CodexJsonRpcClient(objectMapper, null, writer, executor,
+                Duration.ofSeconds(5));
+        List<CodexRpcMessage> messages = new ArrayList<>();
+        client.messages().subscribe(messages::add);
+
+        client.handleLine("{\"id\":61,\"method\":\"item/permissions/requestApproval\",\"params\":{}}");
+        client.respond(messages.getFirst().id(), objectMapper.createObjectNode().put("ok", true));
+
+        JsonNode response = objectMapper.readTree(writer.toString().trim());
+        assertThat(response.get("id").isNumber()).isTrue();
+        assertThat(response.get("id").asInt()).isEqualTo(61);
+    }
+
+    @Test
+    void preservesStringServerRequestIdWhenRespondingError() throws Exception {
+        StringWriter writer = new StringWriter();
+        CodexJsonRpcClient client = new CodexJsonRpcClient(objectMapper, null, writer, executor,
+                Duration.ofSeconds(5));
+        List<CodexRpcMessage> messages = new ArrayList<>();
+        client.messages().subscribe(messages::add);
+
+        client.handleLine("{\"id\":\"61\",\"method\":\"item/permissions/requestApproval\",\"params\":{}}");
+        client.respondError(messages.getFirst().id(), CodexProtocolConstants.JSON_RPC_METHOD_NOT_FOUND,
+                "unsupported");
+
+        JsonNode response = objectMapper.readTree(writer.toString().trim());
+        assertThat(response.get("id").isTextual()).isTrue();
+        assertThat(response.get("id").asText()).isEqualTo("61");
     }
 
     @Test

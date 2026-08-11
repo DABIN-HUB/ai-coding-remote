@@ -2,7 +2,9 @@ package com.wangbin.ai.agent.daemon.adapter.codex;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
 import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
@@ -98,13 +100,35 @@ class CodexAppServerAdapterTest {
         assertThat(adapter.runtimeState()).isEqualTo(CodexRuntimeState.READY);
     }
 
+    @Test
+    void emitsSessionStartedOnlyOnceWhenThreadStartedNotificationFollowsStartResponse(@TempDir Path workspace)
+            throws Exception {
+        TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
+        CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
+
+        var session = adapter.startSession(startRequest(workspace));
+        List<AgentEvent> events = new ArrayList<>();
+        adapter.events(session.platformSessionId()).subscribe(events::add);
+
+        adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_THREAD_STARTED,
+                objectMapper.readTree("{\"threadId\":\"native-1\"}")));
+        adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_THREAD_STARTED,
+                objectMapper.readTree("{\"threadId\":\"native-1\"}")));
+
+        assertThat(events)
+                .filteredOn(event -> event.type() == AgentEventType.SESSION_STARTED)
+                .hasSize(1)
+                .extracting(AgentEvent::seq)
+                .containsExactly(1L);
+    }
+
     private CodexAppServerAdapter newAdapter(Path workspace, List<TestRpcClient> clients) {
         AgentCodexProperties codexProperties = new AgentCodexProperties();
         codexProperties.setRequestTimeout(Duration.ofSeconds(1));
         AgentDaemonProperties daemonProperties = new AgentDaemonProperties();
         List<TestRpcClient> remainingClients = new ArrayList<>(clients);
         return new CodexAppServerAdapter(objectMapper, codexProperties, new TestAppServerProcess(), workspaceManager(workspace),
-                new CodexEventMapper(objectMapper), new DeltaEventAggregator(daemonProperties, scheduler),
+                new CodexEventMapper(), new DeltaEventAggregator(daemonProperties, scheduler),
                 processIoExecutor) {
 
             @Override
@@ -182,7 +206,7 @@ class CodexAppServerAdapterTest {
         }
 
         @Override
-        public void respondError(String id, int code, String message) {
+        public void respondError(JsonNode id, int code, String message) {
             errorCodes.add(code);
         }
 

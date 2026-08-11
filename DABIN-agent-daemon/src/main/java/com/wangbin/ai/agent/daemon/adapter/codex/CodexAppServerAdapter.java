@@ -106,7 +106,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         platformSessions.put(platformSessionId, context);
         nativeSessions.put(nativeSessionId, context);
         emit(new AgentEvent(null, UUID.randomUUID().toString(), request.tenantId(), request.userId(),
-                request.deviceId(), request.projectId(), platformSessionId, context.nextSeq(), AgentType.CODEX,
+                request.deviceId(), request.projectId(), platformSessionId, 0, AgentType.CODEX,
                 com.wangbin.ai.agent.contract.enums.AgentEventType.SESSION_STARTED, null, null,
                 new SessionPayload(nativeSessionId, AgentSessionStatus.RUNNING, null,
                         Map.of("source", CodexProtocolConstants.METHOD_THREAD_START)),

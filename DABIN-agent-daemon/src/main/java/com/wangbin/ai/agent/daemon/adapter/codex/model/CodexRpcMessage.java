@@ -1,10 +1,11 @@
 package com.wangbin.ai.agent.daemon.adapter.codex.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 
 public record CodexRpcMessage(
         CodexRpcMessageKind kind,
-        String id,
+        JsonNode id,
         String method,
         JsonNode params,
         JsonNode result,
@@ -16,7 +17,15 @@ public record CodexRpcMessage(
     }
 
     public static CodexRpcMessage serverRequest(String id, String method, JsonNode params) {
+        return serverRequest(id == null ? null : TextNode.valueOf(id), method, params);
+    }
+
+    public static CodexRpcMessage serverRequest(JsonNode id, String method, JsonNode params) {
         return new CodexRpcMessage(CodexRpcMessageKind.SERVER_REQUEST, id, method, params, null, null);
+    }
+
+    public String idText() {
+        return id == null || id.isNull() ? null : id.asText();
     }
 
 }
