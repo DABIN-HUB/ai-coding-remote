@@ -103,7 +103,6 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         ensureStarted(workspace);
         ObjectNode params = objectMapper.createObjectNode();
         params.put("cwd", workspace.toString());
-        params.put("experimentalRawEvents", true);
         params.put("approvalPolicy", "on-request");
         JsonNode response = await(rpcClient.request(CodexProtocolConstants.METHOD_THREAD_START, params),
                 CodexProtocolConstants.METHOD_THREAD_START);

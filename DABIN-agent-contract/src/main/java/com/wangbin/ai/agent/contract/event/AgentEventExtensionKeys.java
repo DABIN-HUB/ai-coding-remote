@@ -12,6 +12,9 @@ public final class AgentEventExtensionKeys {
     public static final String NATIVE_ITEM_TYPE = "nativeItemType";
     public static final String NATIVE_PHASE = "nativePhase";
     public static final String NATIVE_STATUS = "nativeStatus";
+    public static final String NATIVE_ERROR_INFO = "nativeErrorInfo";
+    public static final String NATIVE_HTTP_STATUS_CODE = "nativeHttpStatusCode";
+    public static final String NATIVE_ADDITIONAL_DETAILS = "nativeAdditionalDetails";
 
     private AgentEventExtensionKeys() {
     }

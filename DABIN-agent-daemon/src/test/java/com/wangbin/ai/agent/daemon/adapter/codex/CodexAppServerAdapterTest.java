@@ -105,6 +105,7 @@ class CodexAppServerAdapterTest {
                 CodexProtocolConstants.METHOD_THREAD_START);
         assertThat(secondClient.requests).containsExactly(CodexProtocolConstants.METHOD_INITIALIZE,
                 CodexProtocolConstants.METHOD_THREAD_START);
+        assertThat(firstClient.requestParams.get(1).has("experimentalRawEvents")).isFalse();
         assertThat(adapter.runtimeState()).isEqualTo(CodexRuntimeState.READY);
     }
 
@@ -167,7 +168,16 @@ class CodexAppServerAdapterTest {
                         }
                         """)));
         adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_TURN_COMPLETED,
-                objectMapper.readTree("{\"threadId\":\"native-1\",\"turn\":{\"id\":\"turn-1\"}}")));
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turn": {
+                            "id": "turn-1",
+                            "status": "completed",
+                            "items": []
+                          }
+                        }
+                        """)));
 
         AgentEvent messageEvent = events.stream()
                 .filter(event -> event.type() == AgentEventType.AGENT_MESSAGE)

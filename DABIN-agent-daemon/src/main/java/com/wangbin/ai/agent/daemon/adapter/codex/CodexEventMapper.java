@@ -39,8 +39,7 @@ public class CodexEventMapper {
                     new SessionPayload(context.nativeSessionId(), mapThreadStatus(params), null, extensions(message))));
             case CodexProtocolConstants.METHOD_TURN_STARTED -> List.of(event(context, AgentEventType.SESSION_STATE_CHANGED,
                     new SessionPayload(context.nativeSessionId(), AgentSessionStatus.RUNNING, null, extensions(message))));
-            case CodexProtocolConstants.METHOD_TURN_COMPLETED -> List.of(event(context, AgentEventType.SESSION_IDLE,
-                    new SessionPayload(context.nativeSessionId(), AgentSessionStatus.IDLE, null, extensions(message))));
+            case CodexProtocolConstants.METHOD_TURN_COMPLETED -> mapTurnCompleted(message, context, params);
             case CodexProtocolConstants.METHOD_ITEM_STARTED -> mapItemStarted(message, context, params);
             case CodexProtocolConstants.METHOD_ITEM_COMPLETED -> mapItemCompleted(message, context, params);
             case CodexProtocolConstants.METHOD_AGENT_MESSAGE_DELTA -> List.of(event(context, AgentEventType.AGENT_MESSAGE_DELTA,
@@ -61,9 +60,8 @@ public class CodexEventMapper {
                             extensions(message))));
             case CodexProtocolConstants.METHOD_DIFF_UPDATED -> List.of(event(context, AgentEventType.DIFF_UPDATED,
                     new DiffUpdatedPayload(text(params, "diff"), extensions(message))));
-            case CodexProtocolConstants.METHOD_ERROR -> List.of(event(context, AgentEventType.ERROR,
-                    new AgentErrorPayload(errorCode(params), errorMessage(params),
-                            params != null && params.path("willRetry").asBoolean(false), extensions(message))));
+            case CodexProtocolConstants.METHOD_ERROR -> List.of(errorEvent(context,
+                    CodexErrorExtractor.fromErrorNotification(params), extensions(message)));
             case CodexProtocolConstants.METHOD_WARNING, CodexProtocolConstants.METHOD_GUARDIAN_WARNING,
                     CodexProtocolConstants.METHOD_CONFIG_WARNING -> List.of(event(context, AgentEventType.WARNING,
                     new WarningPayload(firstNonBlank(text(params, "message", "msg"), "Codex warning"),
@@ -119,12 +117,37 @@ public class CodexEventMapper {
                 new AgentMessagePayload(messageId, "assistant", content, false, extensions(message, item))));
     }
 
+    private List<AgentEvent> mapTurnCompleted(CodexRpcMessage message, CodexSessionContext context, JsonNode params) {
+        JsonNode turn = params == null ? null : params.path("turn");
+        String status = text(turn, "status");
+        Map<String, Object> extensions = extensions(message, turn);
+        if (CodexProtocolConstants.TURN_STATUS_COMPLETED.equals(status)) {
+            return List.of(event(context, AgentEventType.SESSION_IDLE,
+                    new SessionPayload(context.nativeSessionId(), AgentSessionStatus.IDLE, null, extensions)));
+        }
+        if (CodexProtocolConstants.TURN_STATUS_FAILED.equals(status)) {
+            return List.of(errorEvent(context, CodexErrorExtractor.fromFailedTurn(turn), extensions));
+        }
+        if (CodexProtocolConstants.TURN_STATUS_INTERRUPTED.equals(status)) {
+            return List.of(errorEvent(context, CodexErrorExtractor.interruptedTurn(), extensions));
+        }
+        return List.of(event(context, AgentEventType.SESSION_STATE_CHANGED,
+                new SessionPayload(context.nativeSessionId(), AgentSessionStatus.RUNNING, null, extensions)));
+    }
+
     private AgentEvent event(CodexSessionContext context, AgentEventType type, AgentEventPayload payload) {
         Map<String, Object> eventExtensions = new LinkedHashMap<>();
         putIfPresent(eventExtensions, AgentEventExtensionKeys.PLATFORM_COMMAND_ID, context.activePlatformCommandId());
         return new AgentEvent(null, null, context.tenantId(), context.userId(), context.deviceId(), context.projectId(),
                 context.platformSessionId(), 0, context.agentType(), type, null, null, payload,
                 Map.copyOf(eventExtensions));
+    }
+
+    private AgentEvent errorEvent(CodexSessionContext context, CodexErrorClassification error,
+                                  Map<String, Object> payloadExtensions) {
+        return event(context, AgentEventType.ERROR,
+                new AgentErrorPayload(error.code().name(), error.message(), error.retryable(),
+                        mergeExtensions(payloadExtensions, error.extensions())));
     }
 
     private AgentSessionStatus mapThreadStatus(JsonNode params) {
@@ -169,6 +192,17 @@ public class CodexEventMapper {
         return Map.copyOf(extensions);
     }
 
+    private Map<String, Object> mergeExtensions(Map<String, Object> first, Map<String, Object> second) {
+        Map<String, Object> extensions = new LinkedHashMap<>();
+        if (first != null) {
+            extensions.putAll(first);
+        }
+        if (second != null) {
+            extensions.putAll(second);
+        }
+        return Map.copyOf(extensions);
+    }
+
     private Map<String, Object> safePermissionRequest(JsonNode params) {
         Map<String, Object> request = new LinkedHashMap<>();
         putIfPresent(request, "threadId", text(params, "threadId"));
@@ -180,14 +214,6 @@ public class CodexEventMapper {
         putIfPresent(request, "action", text(params, "action"));
         putIfPresent(request, "status", text(params, "status"));
         return Map.copyOf(request);
-    }
-
-    private String errorCode(JsonNode params) {
-        return firstNonBlank(text(params, "code", "type"), "codex_error");
-    }
-
-    private String errorMessage(JsonNode params) {
-        return firstNonBlank(text(params, "message", "msg", "additionalDetails"), "Codex error");
     }
 
     private String firstNonBlank(String value, String fallback) {

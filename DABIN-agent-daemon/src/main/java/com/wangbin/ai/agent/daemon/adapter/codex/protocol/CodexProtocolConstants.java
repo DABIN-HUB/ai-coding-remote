@@ -39,6 +39,9 @@ public final class CodexProtocolConstants {
     public static final String ITEM_TYPE_PLAN = "plan";
     public static final String MESSAGE_PHASE_COMMENTARY = "commentary";
     public static final String MESSAGE_PHASE_FINAL_ANSWER = "final_answer";
+    public static final String TURN_STATUS_COMPLETED = "completed";
+    public static final String TURN_STATUS_INTERRUPTED = "interrupted";
+    public static final String TURN_STATUS_FAILED = "failed";
     public static final int JSON_RPC_METHOD_NOT_FOUND = -32601;
     public static final int JSON_RPC_ROUTE_UNAVAILABLE = -32000;
 

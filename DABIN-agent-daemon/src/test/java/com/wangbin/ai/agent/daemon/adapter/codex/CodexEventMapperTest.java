@@ -5,6 +5,7 @@ import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
+import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.CommandOutputPayload;
 import com.wangbin.ai.agent.contract.event.FileChangedPayload;
@@ -222,7 +223,16 @@ class CodexEventMapperTest {
     @Test
     void mapsTurnCompletedToIdleSessionEvent() throws Exception {
         var message = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_TURN_COMPLETED,
-                objectMapper.readTree("{\"threadId\":\"native-1\",\"turn\":{\"id\":\"turn-1\"}}"));
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turn": {
+                            "id": "turn-1",
+                            "status": "completed",
+                            "items": []
+                          }
+                        }
+                        """));
 
         var events = mapper.map(message, context);
 
@@ -230,6 +240,172 @@ class CodexEventMapperTest {
         assertThat(events.getFirst().type()).isEqualTo(AgentEventType.SESSION_IDLE);
         SessionPayload payload = (SessionPayload) events.getFirst().payload();
         assertThat(payload.status()).isEqualTo(AgentSessionStatus.IDLE);
+    }
+
+    @Test
+    void mapsNestedRetryableResponseStreamDisconnectedError() throws Exception {
+        context.beginPlatformCommand(TEST_PLATFORM_COMMAND_ID);
+        var message = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ERROR,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "willRetry": true,
+                          "error": {
+                            "message": "stream disconnected before completion",
+                            "additionalDetails": "response stream disconnected after headers",
+                            "codexErrorInfo": {
+                              "responseStreamDisconnected": {
+                                "httpStatusCode": 502
+                              }
+                            }
+                          }
+                        }
+                        """));
+
+        var events = mapper.map(message, context);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo(AgentEventType.ERROR);
+        assertThat(events.getFirst().extensions())
+                .containsEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, TEST_PLATFORM_COMMAND_ID);
+        AgentErrorPayload payload = (AgentErrorPayload) events.getFirst().payload();
+        assertThat(payload.code()).isEqualTo("CODEX_RESPONSE_STREAM_DISCONNECTED");
+        assertThat(payload.message()).isEqualTo("stream disconnected before completion");
+        assertThat(payload.retryable()).isTrue();
+        assertThat(payload.extensions())
+                .containsEntry(AgentEventExtensionKeys.NATIVE_METHOD, CodexProtocolConstants.METHOD_ERROR)
+                .containsEntry(AgentEventExtensionKeys.NATIVE_ERROR_INFO, "responseStreamDisconnected")
+                .containsEntry(AgentEventExtensionKeys.NATIVE_HTTP_STATUS_CODE, 502)
+                .containsEntry(AgentEventExtensionKeys.NATIVE_ADDITIONAL_DETAILS,
+                        "response stream disconnected after headers")
+                .doesNotContainKey("params")
+                .doesNotContainKey("rawJson");
+    }
+
+    @Test
+    void mapsUnauthorizedAndUsageLimitAsTerminalCodexErrors() throws Exception {
+        var unauthorized = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ERROR,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "willRetry": false,
+                          "error": {
+                            "message": "authentication failed",
+                            "codexErrorInfo": "unauthorized"
+                          }
+                        }
+                        """));
+        var usageLimit = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ERROR,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-2",
+                          "willRetry": false,
+                          "error": {
+                            "message": "usage limit exceeded",
+                            "codexErrorInfo": "usageLimitExceeded"
+                          }
+                        }
+                        """));
+
+        AgentErrorPayload unauthorizedPayload = (AgentErrorPayload) mapper.map(unauthorized, context)
+                .getFirst().payload();
+        AgentErrorPayload usageLimitPayload = (AgentErrorPayload) mapper.map(usageLimit, context)
+                .getFirst().payload();
+
+        assertThat(unauthorizedPayload.code()).isEqualTo("CODEX_UNAUTHORIZED");
+        assertThat(unauthorizedPayload.retryable()).isFalse();
+        assertThat(usageLimitPayload.code()).isEqualTo("CODEX_USAGE_LIMIT_EXCEEDED");
+        assertThat(usageLimitPayload.retryable()).isFalse();
+    }
+
+    @Test
+    void mapsHttpConnectionFailedWithStatusCode() throws Exception {
+        var message = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_ERROR,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "willRetry": true,
+                          "error": {
+                            "message": "connection failed",
+                            "codexErrorInfo": {
+                              "httpConnectionFailed": {
+                                "httpStatusCode": 503
+                              }
+                            }
+                          }
+                        }
+                        """));
+
+        AgentErrorPayload payload = (AgentErrorPayload) mapper.map(message, context).getFirst().payload();
+
+        assertThat(payload.code()).isEqualTo("CODEX_HTTP_CONNECTION_FAILED");
+        assertThat(payload.retryable()).isTrue();
+        assertThat(payload.extensions()).containsEntry(AgentEventExtensionKeys.NATIVE_HTTP_STATUS_CODE, 503);
+    }
+
+    @Test
+    void mapsFailedTurnToTerminalErrorInsteadOfIdle() throws Exception {
+        context.beginPlatformCommand(TEST_PLATFORM_COMMAND_ID);
+        var message = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_TURN_COMPLETED,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turn": {
+                            "id": "turn-1",
+                            "status": "failed",
+                            "items": [],
+                            "error": {
+                              "message": "too many failed attempts",
+                              "codexErrorInfo": {
+                                "responseTooManyFailedAttempts": {
+                                  "httpStatusCode": 502
+                                }
+                              }
+                            }
+                          }
+                        }
+                        """));
+
+        var events = mapper.map(message, context);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo(AgentEventType.ERROR);
+        assertThat(events.getFirst().extensions())
+                .containsEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, TEST_PLATFORM_COMMAND_ID);
+        AgentErrorPayload payload = (AgentErrorPayload) events.getFirst().payload();
+        assertThat(payload.code()).isEqualTo("CODEX_TOO_MANY_FAILED_ATTEMPTS");
+        assertThat(payload.message()).isEqualTo("too many failed attempts");
+        assertThat(payload.retryable()).isFalse();
+        assertThat(payload.extensions())
+                .containsEntry(AgentEventExtensionKeys.NATIVE_METHOD, CodexProtocolConstants.METHOD_TURN_COMPLETED)
+                .containsEntry(AgentEventExtensionKeys.NATIVE_STATUS, "failed");
+    }
+
+    @Test
+    void mapsInterruptedTurnToTerminalError() throws Exception {
+        var message = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_TURN_COMPLETED,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turn": {
+                            "id": "turn-1",
+                            "status": "interrupted",
+                            "items": []
+                          }
+                        }
+                        """));
+
+        var events = mapper.map(message, context);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo(AgentEventType.ERROR);
+        AgentErrorPayload payload = (AgentErrorPayload) events.getFirst().payload();
+        assertThat(payload.code()).isEqualTo("CODEX_TURN_INTERRUPTED");
+        assertThat(payload.retryable()).isFalse();
     }
 
     @Test
