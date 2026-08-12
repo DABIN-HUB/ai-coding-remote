@@ -28,6 +28,7 @@ public final class CodexProtocolConstants {
     public static final String METHOD_WARNING = "warning";
     public static final String METHOD_GUARDIAN_WARNING = "guardianWarning";
     public static final String METHOD_CONFIG_WARNING = "configWarning";
+    public static final String METHOD_SERVER_REQUEST_RESOLVED = "serverRequest/resolved";
     public static final String METHOD_PERMISSION_REQUEST_APPROVAL = "item/permissions/requestApproval";
     public static final String METHOD_COMMAND_REQUEST_APPROVAL = "item/commandExecution/requestApproval";
     public static final String METHOD_FILE_CHANGE_REQUEST_APPROVAL = "item/fileChange/requestApproval";

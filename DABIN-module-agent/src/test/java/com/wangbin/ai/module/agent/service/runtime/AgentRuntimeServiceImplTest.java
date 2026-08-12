@@ -61,7 +61,7 @@ class AgentRuntimeServiceImplTest {
         assertThat(runtime.getRuntimeId()).isEqualTo(TEST_RUNTIME_ID);
         assertThat(runtime.getRuntimeType()).isEqualTo(AgentRuntimeTypes.CODEX_APP_SERVER);
         assertThat(runtime.getRuntimeStatus()).isEqualTo(RuntimeStatus.AVAILABLE.name());
-        assertThat(runtime.getCapabilitiesJson()).contains("\"prompt\":true", "\"permission\":false");
+        assertThat(runtime.getCapabilitiesJson()).contains("\"prompt\":true", "\"permission\":true");
     }
 
     @Test

@@ -9,7 +9,6 @@ import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.CommandOutputPayload;
 import com.wangbin.ai.agent.contract.event.FileChangedPayload;
-import com.wangbin.ai.agent.contract.event.PermissionRequiredPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
@@ -409,21 +408,11 @@ class CodexEventMapperTest {
     }
 
     @Test
-    void mapsServerApprovalRequestToPermissionRequired() throws Exception {
+    void ignoresServerApprovalRequestBecauseAdapterOwnsNativeRequestIds() throws Exception {
         var message = CodexRpcMessage.serverRequest("approval-1", CodexProtocolConstants.METHOD_PERMISSION_REQUEST_APPROVAL,
                 objectMapper.readTree("{\"threadId\":\"native-1\",\"permission\":\"write\",\"command\":\"rm -rf secret\"}"));
 
-        var events = mapper.map(message, context);
-
-        assertThat(events).hasSize(1);
-        assertThat(events.getFirst().type()).isEqualTo(AgentEventType.PERMISSION_REQUIRED);
-        PermissionRequiredPayload payload = (PermissionRequiredPayload) events.getFirst().payload();
-        assertThat(payload.permissionId()).isEqualTo("approval-1");
-        assertThat(payload.title()).isEqualTo(CodexProtocolConstants.METHOD_PERMISSION_REQUEST_APPROVAL);
-        assertThat(payload.request())
-                .containsEntry("threadId", "native-1")
-                .containsEntry("permission", "write")
-                .doesNotContainKey("command");
+        assertThat(mapper.map(message, context)).isEmpty();
     }
 
     @Test

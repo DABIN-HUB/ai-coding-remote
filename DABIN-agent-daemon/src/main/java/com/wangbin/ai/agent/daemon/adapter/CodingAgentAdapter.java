@@ -21,7 +21,7 @@ public interface CodingAgentAdapter {
 
     void interrupt(String sessionId);
 
-    void resolvePermission(String sessionId, String permissionId, PermissionDecision decision);
+    void resolvePermission(String sessionId, String permissionId, PermissionDecision decision, String decisionCommandId);
 
     Flux<AgentEvent> events(String sessionId);
 

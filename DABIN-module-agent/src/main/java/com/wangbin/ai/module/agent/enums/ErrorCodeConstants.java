@@ -35,4 +35,12 @@ public interface ErrorCodeConstants {
     ErrorCode COMMAND_DISPATCH_FAILED = new ErrorCode(1_020_000_029, "Command 投递失败");
     ErrorCode COMMAND_ACK_TIMEOUT = new ErrorCode(1_020_000_030, "Command ACK 超时");
     ErrorCode AGENT_EVENT_SEQUENCE_GAP = new ErrorCode(1_020_000_031, "AgentEvent 序号存在缺口");
+    ErrorCode PERMISSION_NOT_EXISTS = new ErrorCode(1_020_000_032, "Permission request does not exist");
+    ErrorCode PERMISSION_ACCESS_DENIED = new ErrorCode(1_020_000_033, "Permission request access denied");
+    ErrorCode PERMISSION_ALREADY_RESOLVED = new ErrorCode(1_020_000_034, "Permission request is already resolved");
+    ErrorCode PERMISSION_STATE_INVALID = new ErrorCode(1_020_000_035, "Permission request state is invalid");
+    ErrorCode PERMISSION_DECISION_INVALID = new ErrorCode(1_020_000_036, "Permission decision is invalid");
+    ErrorCode PERMISSION_DEVICE_OFFLINE = new ErrorCode(1_020_000_037, "Permission device is offline");
+    ErrorCode PERMISSION_DISPATCH_FAILED = new ErrorCode(1_020_000_038, "Permission decision dispatch failed");
+    ErrorCode PERMISSION_NOT_PENDING = new ErrorCode(1_020_000_039, "Permission request is not pending");
 }

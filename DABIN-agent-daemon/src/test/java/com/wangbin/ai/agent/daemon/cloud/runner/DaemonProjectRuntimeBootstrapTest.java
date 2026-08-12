@@ -76,7 +76,7 @@ class DaemonProjectRuntimeBootstrapTest {
         assertThat(runtimeRequest.runtimeVersion()).isEqualTo(TEST_VERSION);
         assertThat(runtimeRequest.executablePath()).isEqualTo(runtimeDiscovery.resolvedPath.toString());
         assertThat(runtimeRequest.capabilities().prompt()).isTrue();
-        assertThat(runtimeRequest.capabilities().permission()).isFalse();
+        assertThat(runtimeRequest.capabilities().permission()).isTrue();
     }
 
     private Path testWorkspace() throws IOException {
@@ -186,7 +186,8 @@ class DaemonProjectRuntimeBootstrapTest {
         }
 
         @Override
-        public void resolvePermission(String sessionId, String permissionId, PermissionDecision decision) {
+        public void resolvePermission(String sessionId, String permissionId, PermissionDecision decision,
+                                      String decisionCommandId) {
             throw new UnsupportedOperationException();
         }
 

@@ -36,6 +36,7 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     private static final String CODE_REJECTED = "REJECTED";
     private static final String CODE_BUSY = "SESSION_BUSY";
     private static final String CODE_FAILED = "COMMAND_START_FAILED";
+    private static final String CODE_PERMISSION_FAILED = "PERMISSION_DECISION_FAILED";
 
     private final List<CodingAgentAdapter> adapters;
     private final LocalProjectRegistry localProjectRegistry;
@@ -58,8 +59,19 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
             outboundSender.sendCommandAck(rejected(command, "command identity does not match daemon credential"));
             return;
         }
-        if (command.commandType() != CommandType.PROMPT || !(command.payload() instanceof PromptCommandPayload payload)) {
+        if (command.commandType() == CommandType.PROMPT) {
+            handlePrompt(command, outboundSender);
+        } else if (command.commandType() == CommandType.APPROVE_PERMISSION
+                || command.commandType() == CommandType.REJECT_PERMISSION) {
+            handlePermissionDecision(command, outboundSender);
+        } else {
             outboundSender.sendCommandAck(rejected(command, "unsupported command type"));
+        }
+    }
+
+    private void handlePrompt(AgentCommand command, DaemonOutboundSender outboundSender) {
+        if (!(command.payload() instanceof PromptCommandPayload payload)) {
+            outboundSender.sendCommandAck(rejected(command, "invalid prompt payload"));
             return;
         }
         LocalProject project = localProjectRegistry.findByPlatformProjectId(command.projectId()).orElse(null);
@@ -121,6 +133,53 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
         }
     }
 
+    private void handlePermissionDecision(AgentCommand command, DaemonOutboundSender outboundSender) {
+        if (!(command.payload() instanceof PermissionDecisionCommandPayload payload)
+                || !isPermissionDecisionConsistent(command.commandType(), payload.decision())) {
+            outboundSender.sendCommandAck(rejected(command, "invalid permission decision payload"));
+            return;
+        }
+        LocalProject project = localProjectRegistry.findByPlatformProjectId(command.projectId()).orElse(null);
+        if (project == null || project.agentType() != command.agentType()) {
+            outboundSender.sendCommandAck(rejected(command, "project is not registered locally"));
+            return;
+        }
+        try {
+            Path realWorkspace = workspaceManager.validateWorkspace(project.realWorkspace().toString());
+            if (!realWorkspace.equals(project.realWorkspace())) {
+                outboundSender.sendCommandAck(rejected(command, "workspace real path changed"));
+                return;
+            }
+        } catch (AgentCapabilityException ex) {
+            outboundSender.sendCommandAck(rejected(command, "workspace is not allowed locally"));
+            return;
+        }
+        CodingAgentAdapter adapter = sessionAdapters.get(command.sessionId());
+        if (adapter == null || !adapter.capabilities().permission()) {
+            outboundSender.sendCommandAck(rejected(command, "agent adapter does not support permission decision"));
+            return;
+        }
+        if (dedupCache.reserve(command.commandId()) == CommandDedupResult.DUPLICATE) {
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.DUPLICATE, CODE_DUPLICATE, "duplicate command", Instant.now(), Map.of()));
+            return;
+        }
+        try {
+            adapter.resolvePermission(command.sessionId(), payload.permissionId(), payload.decision(),
+                    command.commandId());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "permission decision accepted", Instant.now(),
+                    Map.of()));
+            dedupCache.markCompleted(command.commandId());
+        } catch (RuntimeException ex) {
+            log.warn("permission decision failed: sessionId={}, commandId={}, errorType={}, error={}",
+                    command.sessionId(), command.commandId(), ex.getClass().getSimpleName(), ex.getMessage());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.FAILED, CODE_PERMISSION_FAILED, "permission decision failed", Instant.now(),
+                    Map.of()));
+        }
+    }
+
     private void handleAgentEvent(DaemonOutboundSender outboundSender, AgentEvent event) {
         outboundSender.sendAgentEvent(event);
         if (AgentCommandLifecyclePolicy.isTerminalForActiveCommand(event)) {
@@ -129,6 +188,19 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
                 activeSessionCommands.remove(event.sessionId(), text);
             }
         }
+    }
+
+    private boolean isPermissionDecisionConsistent(CommandType commandType,
+                                                   com.wangbin.ai.agent.contract.enums.PermissionDecision decision) {
+        if (commandType == CommandType.APPROVE_PERMISSION) {
+            return decision == com.wangbin.ai.agent.contract.enums.PermissionDecision.APPROVED
+                    || decision == com.wangbin.ai.agent.contract.enums.PermissionDecision.APPROVED_FOR_SESSION;
+        }
+        if (commandType == CommandType.REJECT_PERMISSION) {
+            return decision == com.wangbin.ai.agent.contract.enums.PermissionDecision.REJECTED
+                    || decision == com.wangbin.ai.agent.contract.enums.PermissionDecision.CANCELLED;
+        }
+        return false;
     }
 
     private boolean isIdentityValid(AgentCommand command, DeviceCredentialState credential) {

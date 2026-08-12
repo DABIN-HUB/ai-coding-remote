@@ -19,6 +19,7 @@ public final class AgentCoordinationKeys {
     private static final String RELAY_NODE_PREFIX = "agent:relay:node:";
     private static final String PAIRING_LOCK_PREFIX = "agent:lock:pair:";
     private static final String COMMAND_IDEMPOTENCY_LOCK_PREFIX = "agent:lock:command:";
+    private static final String PERMISSION_DECISION_LOCK_PREFIX = "agent:lock:permission:";
     private static final String RELAY_COMMAND_CHANNEL_PREFIX = "agent:relay:command:";
     private static final String EVENT_INGRESS_STREAM = "agent:event:ingress";
     private static final String SHA_256_ALGORITHM = "SHA-256";
@@ -61,6 +62,10 @@ public final class AgentCoordinationKeys {
     public static String commandIdempotencyLock(Long tenantId, Long userId, String sessionId, String clientRequestId) {
         return COMMAND_IDEMPOTENCY_LOCK_PREFIX + tenantId + ":" + userId + ":" + sha256UrlSafe(sessionId)
                 + ":" + sha256UrlSafe(clientRequestId);
+    }
+
+    public static String permissionDecisionLock(Long tenantId, String permissionId) {
+        return PERMISSION_DECISION_LOCK_PREFIX + tenantId + ":" + sha256UrlSafe(permissionId);
     }
 
     public static String relayCommandChannel(String relayNodeId) {

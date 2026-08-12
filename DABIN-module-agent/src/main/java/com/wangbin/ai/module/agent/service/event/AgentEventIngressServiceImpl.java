@@ -19,6 +19,7 @@ import com.wangbin.ai.module.agent.dal.mysql.project.AgentProjectMapper;
 import com.wangbin.ai.module.agent.dal.mysql.session.AgentSessionMapper;
 import com.wangbin.ai.module.agent.enums.*;
 import com.wangbin.ai.module.agent.framework.id.AgentIdFactory;
+import com.wangbin.ai.module.agent.service.permission.AgentPermissionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,7 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
     private final AgentMessageMapper messageMapper;
     private final AgentEventReliabilityPolicy reliabilityPolicy;
     private final AgentIdFactory idFactory;
+    private final AgentPermissionService permissionService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -90,6 +92,7 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
             transitionCommand(command, AgentCommandDbStatus.FAILED, ack.message());
         }
         commandMapper.updateById(command);
+        permissionService.handleDecisionCommandAck(command, ack);
     }
 
     private void applyEvent(AgentSessionDO session, AgentEvent event) {
@@ -118,6 +121,20 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
         if (event.type() == AgentEventType.SESSION_COMPLETED) {
             session.setSessionStatus(AgentSessionDbStatus.CLOSED.name());
             session.setClosedTime(LocalDateTime.now());
+            return;
+        }
+        if (event.type() == AgentEventType.PERMISSION_REQUIRED
+                && event.payload() instanceof PermissionRequiredPayload payload) {
+            permissionService.handlePermissionRequired(session, event, platformCommandId, payload);
+            session.setSessionStatus(AgentSessionDbStatus.WAITING_PERMISSION.name());
+            return;
+        }
+        if (event.type() == AgentEventType.PERMISSION_RESOLVED
+                && event.payload() instanceof PermissionResolvedPayload payload) {
+            permissionService.handlePermissionResolved(payload);
+            if (AgentSessionDbStatus.WAITING_PERMISSION.name().equals(session.getSessionStatus())) {
+                session.setSessionStatus(AgentSessionDbStatus.RUNNING.name());
+            }
             return;
         }
         if (event.type() == AgentEventType.AGENT_MESSAGE && event.payload() instanceof AgentMessagePayload payload) {

@@ -7,12 +7,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AgentCapabilitiesTest {
 
     @Test
-    void codexDefaultReportsOnlyImplementedFirstStageCapabilities() {
+    void codexDefaultReportsImplementedPermissionCapabilities() {
         AgentCapabilities capabilities = AgentCapabilities.codexDefault();
 
         assertThat(capabilities.prompt()).isTrue();
         assertThat(capabilities.resumeSession()).isFalse();
-        assertThat(capabilities.permission()).isFalse();
+        assertThat(capabilities.permission()).isTrue();
         assertThat(capabilities.terminal()).isFalse();
         assertThat(capabilities.fileDiff()).isFalse();
         assertThat(capabilities.plan()).isFalse();

@@ -11,6 +11,7 @@ class AgentEventTypePriorityTest {
     @Test
     void shouldAssignCriticalPriorityToLosslessEvents() {
         assertThat(AgentEventType.PERMISSION_REQUIRED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
+        assertThat(AgentEventType.PERMISSION_RESOLVED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.TASK_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.ERROR.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.SESSION_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);

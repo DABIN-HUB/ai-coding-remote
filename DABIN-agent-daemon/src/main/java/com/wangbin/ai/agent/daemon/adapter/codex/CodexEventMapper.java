@@ -22,12 +22,7 @@ public class CodexEventMapper {
             return List.of();
         }
         if (message.kind() == CodexRpcMessageKind.SERVER_REQUEST) {
-            if (!CodexProtocolConstants.APPROVAL_REQUEST_METHODS.contains(message.method())) {
-                return List.of();
-            }
-            return List.of(event(context, AgentEventType.PERMISSION_REQUIRED,
-                    new PermissionRequiredPayload(message.idText(), message.method(), "Codex requested user approval",
-                            safePermissionRequest(message.params()), extensions(message))));
+            return List.of();
         }
         if (message.kind() != CodexRpcMessageKind.NOTIFICATION) {
             return List.of();
@@ -201,19 +196,6 @@ public class CodexEventMapper {
             extensions.putAll(second);
         }
         return Map.copyOf(extensions);
-    }
-
-    private Map<String, Object> safePermissionRequest(JsonNode params) {
-        Map<String, Object> request = new LinkedHashMap<>();
-        putIfPresent(request, "threadId", text(params, "threadId"));
-        putIfPresent(request, "turnId", text(params, "turnId"));
-        putIfPresent(request, "itemId", text(params, "itemId"));
-        putIfPresent(request, "permission", text(params, "permission"));
-        putIfPresent(request, "reason", text(params, "reason"));
-        putIfPresent(request, "title", text(params, "title"));
-        putIfPresent(request, "action", text(params, "action"));
-        putIfPresent(request, "status", text(params, "status"));
-        return Map.copyOf(request);
     }
 
     private String firstNonBlank(String value, String fallback) {

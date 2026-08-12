@@ -4,9 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.enums.PermissionDecision;
+import com.wangbin.ai.agent.contract.enums.PermissionResolutionStatus;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
+import com.wangbin.ai.agent.contract.event.PermissionRequiredPayload;
+import com.wangbin.ai.agent.contract.event.PermissionResolvedPayload;
+import com.wangbin.ai.agent.contract.permission.CommandExecutionPermissionDetail;
 import com.wangbin.ai.agent.contract.session.PromptCommand;
 import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
@@ -15,6 +20,7 @@ import com.wangbin.ai.agent.daemon.config.AgentCodexProperties;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
 import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
+import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
 import com.wangbin.ai.agent.daemon.exception.AgentSessionException;
@@ -248,13 +254,124 @@ class CodexAppServerAdapterTest {
                 .hasSize(1);
     }
 
+    @Test
+    void commandApprovalUsesPlatformPermissionIdAndPreservesNumericJsonRpcId() throws Exception {
+        Path workspace = testWorkspace("commandApprovalPreservesNumericId");
+        TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
+        CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
+        var session = adapter.startSession(startRequest(workspace));
+        List<AgentEvent> events = new ArrayList<>();
+        adapter.events(session.platformSessionId()).subscribe(events::add);
+        adapter.sendPrompt(session.platformSessionId(), new PromptCommand("cmd-123", "hello", Map.of()));
+
+        adapter.handleMessage(CodexRpcMessage.serverRequest(objectMapper.readTree("123"),
+                CodexProtocolConstants.METHOD_COMMAND_REQUEST_APPROVAL,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "itemId": "item-1",
+                          "command": "git status",
+                          "cwd": ".",
+                          "reason": "inspect",
+                          "availableDecisions": ["accept", "decline"]
+                        }
+                        """)));
+
+        AgentEvent requiredEvent = events.stream()
+                .filter(event -> event.type() == AgentEventType.PERMISSION_REQUIRED)
+                .findFirst()
+                .orElseThrow();
+        assertThat(requiredEvent.extensions())
+                .containsEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, "cmd-123");
+        PermissionRequiredPayload required = (PermissionRequiredPayload) requiredEvent.payload();
+        assertThat(required.permissionId()).startsWith("perm_").isNotEqualTo("123");
+        assertThat(required.detail()).isInstanceOf(CommandExecutionPermissionDetail.class);
+        assertThat(((CommandExecutionPermissionDetail) required.detail()).command()).isEqualTo("git status");
+
+        adapter.resolvePermission(session.platformSessionId(), required.permissionId(), PermissionDecision.APPROVED,
+                "cmd-decision-1");
+        adapter.handleMessage(CodexRpcMessage.notification(CodexProtocolConstants.METHOD_SERVER_REQUEST_RESOLVED,
+                objectMapper.readTree("{\"threadId\":\"native-1\",\"requestId\":123}")));
+
+        assertThat(rpcClient.responseIds).hasSize(1);
+        assertThat(rpcClient.responseIds.getFirst().isNumber()).isTrue();
+        assertThat(rpcClient.responseIds.getFirst().asInt()).isEqualTo(123);
+        assertThat(rpcClient.responseResults.getFirst().path("decision").asText()).isEqualTo("accept");
+        PermissionResolvedPayload resolved = (PermissionResolvedPayload) events.stream()
+                .filter(event -> event.type() == AgentEventType.PERMISSION_RESOLVED)
+                .findFirst()
+                .orElseThrow()
+                .payload();
+        assertThat(resolved.permissionId()).isEqualTo(required.permissionId());
+        assertThat(resolved.decisionCommandId()).isEqualTo("cmd-decision-1");
+        assertThat(resolved.resolutionStatus()).isEqualTo(PermissionResolutionStatus.APPROVED);
+    }
+
+    @Test
+    void fileApprovalRejectsWorkspaceEscapeAndStringJsonRpcIdIsPreserved() throws Exception {
+        Path workspace = testWorkspace("fileApprovalStringId");
+        TestRpcClient rpcClient = new TestRpcClient(objectMapper, processIoExecutor, "native-1");
+        CodexAppServerAdapter adapter = newAdapter(workspace, List.of(rpcClient));
+        var session = adapter.startSession(startRequest(workspace));
+        List<AgentEvent> events = new ArrayList<>();
+        adapter.events(session.platformSessionId()).subscribe(events::add);
+        adapter.sendPrompt(session.platformSessionId(), new PromptCommand("cmd-123", "hello", Map.of()));
+
+        adapter.handleMessage(CodexRpcMessage.serverRequest(objectMapper.readTree("\"abc\""),
+                CodexProtocolConstants.METHOD_FILE_CHANGE_REQUEST_APPROVAL,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "itemId": "file-1",
+                          "reason": "update file",
+                          "changes": [{"path": "README.md", "kind": {"type": "update"}}],
+                          "availableDecisions": ["acceptForSession", "cancel"]
+                        }
+                        """)));
+        PermissionRequiredPayload required = (PermissionRequiredPayload) events.stream()
+                .filter(event -> event.type() == AgentEventType.PERMISSION_REQUIRED)
+                .findFirst()
+                .orElseThrow()
+                .payload();
+
+        adapter.resolvePermission(session.platformSessionId(), required.permissionId(),
+                PermissionDecision.APPROVED_FOR_SESSION, "cmd-decision-2");
+
+        assertThat(rpcClient.responseIds.getFirst().isTextual()).isTrue();
+        assertThat(rpcClient.responseIds.getFirst().asText()).isEqualTo("abc");
+        assertThat(rpcClient.responseResults.getFirst().path("decision").asText()).isEqualTo("acceptForSession");
+
+        long requiredCount = events.stream().filter(event -> event.type() == AgentEventType.PERMISSION_REQUIRED)
+                .count();
+        adapter.handleMessage(CodexRpcMessage.serverRequest(objectMapper.readTree("\"escape\""),
+                CodexProtocolConstants.METHOD_FILE_CHANGE_REQUEST_APPROVAL,
+                objectMapper.readTree("""
+                        {
+                          "threadId": "native-1",
+                          "turnId": "turn-1",
+                          "itemId": "file-escape",
+                          "changes": [{"path": "../outside.txt", "kind": {"type": "update"}}],
+                          "availableDecisions": ["accept", "decline"]
+                        }
+                        """)));
+
+        assertThat(events.stream().filter(event -> event.type() == AgentEventType.PERMISSION_REQUIRED).count())
+                .isEqualTo(requiredCount);
+        assertThat(rpcClient.responseResults.getLast().path("decision").asText()).isEqualTo("decline");
+    }
+
     private CodexAppServerAdapter newAdapter(Path workspace, List<TestRpcClient> clients) {
         AgentCodexProperties codexProperties = new AgentCodexProperties();
         codexProperties.setRequestTimeout(Duration.ofSeconds(1));
         AgentDaemonProperties daemonProperties = new AgentDaemonProperties();
         List<TestRpcClient> remainingClients = new ArrayList<>(clients);
+        CodexPermissionDecisionMapper decisionMapper = new CodexPermissionDecisionMapper(objectMapper);
         return new CodexAppServerAdapter(objectMapper, codexProperties, new TestAppServerProcess(), workspaceManager(workspace),
-                new CodexEventMapper(), new DeltaEventAggregator(daemonProperties, scheduler),
+                new CodexEventMapper(), new CodexPermissionRequestMapper(codexProperties, decisionMapper),
+                decisionMapper, new CodexPendingPermissionRegistry(codexProperties),
+                new DeltaEventAggregator(daemonProperties, scheduler),
                 new SerializedSessionEventEmitter(),
                 processIoExecutor) {
 
@@ -275,7 +392,11 @@ class CodexAppServerAdapterTest {
 
             @Override
             public Path resolveWithinWorkspace(Path workspace, String relativePath) {
-                return workspace.resolve(relativePath);
+                Path resolved = workspace.resolve(relativePath).normalize();
+                if (!resolved.startsWith(workspace)) {
+                    throw new AgentCapabilityException("path escapes workspace");
+                }
+                return resolved;
             }
 
         };
@@ -314,6 +435,8 @@ class CodexAppServerAdapterTest {
         private final String nativeSessionId;
         private final List<String> requests = new ArrayList<>();
         private final List<JsonNode> requestParams = new ArrayList<>();
+        private final List<JsonNode> responseIds = new ArrayList<>();
+        private final List<JsonNode> responseResults = new ArrayList<>();
         private final List<Integer> errorCodes = new ArrayList<>();
         private final List<String> protocolWarningCodes = new ArrayList<>();
         private boolean closed;
@@ -342,6 +465,12 @@ class CodexAppServerAdapterTest {
         @Override
         public void notify(String method, Object params) {
             // The adapter must send initialized, but this test only verifies lifecycle boundaries.
+        }
+
+        @Override
+        public void respond(JsonNode id, Object result) {
+            responseIds.add(id == null ? null : id.deepCopy());
+            responseResults.add(objectMapper.valueToTree(result));
         }
 
         @Override

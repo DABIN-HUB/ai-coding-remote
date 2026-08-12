@@ -1,17 +1,19 @@
 package com.wangbin.ai.agent.contract.permission;
 
+import com.wangbin.ai.agent.contract.enums.PermissionType;
+
 import java.util.Map;
 
 public record PermissionRequest(
         String permissionId,
+        PermissionType permissionType,
         String title,
         String reason,
-        Map<String, Object> nativeRequest,
+        PermissionRequestDetail detail,
         Map<String, Object> extensions
 ) {
 
     public PermissionRequest {
-        nativeRequest = nativeRequest == null ? Map.of() : Map.copyOf(nativeRequest);
         extensions = extensions == null ? Map.of() : Map.copyOf(extensions);
     }
 

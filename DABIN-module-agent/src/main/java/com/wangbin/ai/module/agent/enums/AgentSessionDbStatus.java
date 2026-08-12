@@ -5,6 +5,7 @@ public enum AgentSessionDbStatus {
     CREATED,
     STARTING,
     RUNNING,
+    WAITING_PERMISSION,
     IDLE,
     FAILED,
     CLOSED,

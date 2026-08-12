@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
+import jakarta.validation.constraints.Min;
 
 @Validated
 @ConfigurationProperties(prefix = "agent.codex")
@@ -16,6 +17,12 @@ public class AgentCodexProperties {
     private Duration requestTimeout = Duration.ofSeconds(60);
 
     private boolean experimentalApi = true;
+
+    @Min(1)
+    private int pendingPermissionCapacity = 256;
+
+    @Min(64)
+    private int permissionSnapshotMaxChars = 4096;
 
     public String getExecutable() {
         return executable;
@@ -47,6 +54,22 @@ public class AgentCodexProperties {
 
     public void setExperimentalApi(boolean experimentalApi) {
         this.experimentalApi = experimentalApi;
+    }
+
+    public int getPendingPermissionCapacity() {
+        return pendingPermissionCapacity;
+    }
+
+    public void setPendingPermissionCapacity(int pendingPermissionCapacity) {
+        this.pendingPermissionCapacity = pendingPermissionCapacity;
+    }
+
+    public int getPermissionSnapshotMaxChars() {
+        return permissionSnapshotMaxChars;
+    }
+
+    public void setPermissionSnapshotMaxChars(int permissionSnapshotMaxChars) {
+        this.permissionSnapshotMaxChars = permissionSnapshotMaxChars;
     }
 
 }

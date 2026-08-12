@@ -3,6 +3,8 @@ package com.wangbin.ai.agent.contract.enums;
 public enum PermissionDecision {
 
     APPROVED,
-    REJECTED
+    APPROVED_FOR_SESSION,
+    REJECTED,
+    CANCELLED
 
 }

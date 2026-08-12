@@ -8,8 +8,12 @@ import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.AgentEventPayload;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
+import com.wangbin.ai.agent.contract.event.PermissionRequiredPayload;
+import com.wangbin.ai.agent.contract.event.PermissionResolvedPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
+import com.wangbin.ai.agent.contract.event.WarningPayload;
 import com.wangbin.ai.agent.contract.session.AgentCapabilities;
 import com.wangbin.ai.agent.contract.session.AgentSession;
 import com.wangbin.ai.agent.contract.session.PromptCommand;
@@ -57,6 +61,9 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     private final CodexAppServerProcess appServerProcess;
     private final WorkspaceManager workspaceManager;
     private final CodexEventMapper eventMapper;
+    private final CodexPermissionRequestMapper permissionRequestMapper;
+    private final CodexPermissionDecisionMapper permissionDecisionMapper;
+    private final CodexPendingPermissionRegistry pendingPermissionRegistry;
     private final DeltaEventAggregator eventAggregator;
     private final SerializedSessionEventEmitter sessionEventEmitter;
     private final ExecutorService processIoExecutor;
@@ -74,6 +81,9 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
                                  CodexAppServerProcess appServerProcess,
                                  WorkspaceManager workspaceManager,
                                  CodexEventMapper eventMapper,
+                                 CodexPermissionRequestMapper permissionRequestMapper,
+                                 CodexPermissionDecisionMapper permissionDecisionMapper,
+                                 CodexPendingPermissionRegistry pendingPermissionRegistry,
                                  DeltaEventAggregator eventAggregator,
                                  SerializedSessionEventEmitter sessionEventEmitter,
                                  @Qualifier("agentProcessIoExecutor") ExecutorService processIoExecutor) {
@@ -82,6 +92,9 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         this.appServerProcess = appServerProcess;
         this.workspaceManager = workspaceManager;
         this.eventMapper = eventMapper;
+        this.permissionRequestMapper = permissionRequestMapper;
+        this.permissionDecisionMapper = permissionDecisionMapper;
+        this.pendingPermissionRegistry = pendingPermissionRegistry;
         this.eventAggregator = eventAggregator;
         this.sessionEventEmitter = sessionEventEmitter;
         this.processIoExecutor = processIoExecutor;
@@ -173,8 +186,32 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     @Override
-    public void resolvePermission(String sessionId, String permissionId, PermissionDecision decision) {
-        throw new AgentCapabilityException("Codex permission resolution is not wired in this first-stage adapter");
+    public void resolvePermission(String sessionId, String permissionId, PermissionDecision decision,
+                                  String decisionCommandId) {
+        CodexSessionContext context = requireSession(sessionId);
+        PendingPermission pending = pendingPermissionRegistry.findByPermissionId(permissionId)
+                .orElseThrow(() -> new AgentCapabilityException("permission is not pending: " + permissionId));
+        if (!context.platformSessionId().equals(pending.platformSessionId())) {
+            throw new AgentCapabilityException("permission does not belong to session: " + permissionId);
+        }
+        permissionRequestMapper.validateStoredWorkspace(pending, workspaceManager);
+        CodexPermissionDecisionAttempt attempt = pending.beginDecision(decision, decisionCommandId);
+        if (attempt == CodexPermissionDecisionAttempt.DUPLICATE) {
+            return;
+        }
+        if (attempt == CodexPermissionDecisionAttempt.UNSUPPORTED_DECISION) {
+            throw new AgentCapabilityException("permission decision is not supported by native request");
+        }
+        if (attempt == CodexPermissionDecisionAttempt.NOT_PENDING) {
+            throw new AgentCapabilityException("permission is not pending: " + permissionId);
+        }
+        try {
+            rpcClient.respond(pending.nativeRequestId(), permissionDecisionMapper.responseResult(decision));
+            pending.markDecisionSent(decisionCommandId);
+        } catch (RuntimeException ex) {
+            pending.rollbackDecisionAttempt(decisionCommandId);
+            throw ex;
+        }
     }
 
     @Override
@@ -192,6 +229,17 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
             sessionEventEmitter.releaseSession(removed.platformSessionId());
             nativeSessions.remove(removed.nativeSessionId());
             activeTurnIds.remove(sessionId);
+            pendingPermissionRegistry.removeBySession(sessionId).forEach(permission -> {
+                CodexJsonRpcClient client = rpcClient;
+                if (client != null && !client.isClosed()) {
+                    try {
+                        client.respond(permission.nativeRequestId(),
+                                permissionDecisionMapper.responseResult(PermissionDecision.CANCELLED));
+                    } catch (RuntimeException ignored) {
+                        // Runtime shutdown may already have closed stdin; local cleanup remains authoritative.
+                    }
+                }
+            });
         }
         if (platformSessions.isEmpty() && managedProcess != null) {
             stopRuntime();
@@ -252,6 +300,11 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
             handleServerRequest(message, context);
             return;
         }
+        if (message.kind() == CodexRpcMessageKind.NOTIFICATION
+                && CodexProtocolConstants.METHOD_SERVER_REQUEST_RESOLVED.equals(message.method())) {
+            handleServerRequestResolved(message);
+            return;
+        }
         captureActiveTurn(context, message.params());
         for (AgentEvent event : eventMapper.map(message, context)) {
             emit(event, context);
@@ -274,9 +327,43 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
             return;
         }
         captureActiveTurn(context, message.params());
-        for (AgentEvent event : eventMapper.map(message, context)) {
-            emit(event, context);
+        if (!permissionRequestMapper.isSupportedApprovalMethod(message.method())) {
+            rpcClient.protocolWarning("unsupported_permission_request",
+                    "unsupported Codex approval request method: " + message.method(), null);
+            rpcClient.respondError(message.id(), CodexProtocolConstants.JSON_RPC_METHOD_NOT_FOUND,
+                    "Unsupported approval request method: " + message.method());
+            emit(warningEvent(context, "Unsupported approval request method: " + message.method()), context);
+            return;
         }
+        try {
+            PendingPermission pending = permissionRequestMapper.toPendingPermission(message, context, workspaceManager);
+            CodexPendingPermissionRegistry.RegistrationResult result = pendingPermissionRegistry.register(pending);
+            if (result.created()) {
+                emit(permissionRequiredEvent(context, result.permission()), context);
+            }
+        } catch (CodexPendingPermissionCapacityException ex) {
+            rpcClient.respond(message.id(), permissionDecisionMapper.responseResult(PermissionDecision.REJECTED));
+            emit(warningEvent(context, "Pending approval capacity exceeded; request declined locally"), context);
+        } catch (AgentCapabilityException ex) {
+            rpcClient.respond(message.id(), permissionDecisionMapper.responseResult(PermissionDecision.REJECTED));
+            emit(warningEvent(context, "Approval request rejected by local workspace policy"), context);
+        }
+    }
+
+    private void handleServerRequestResolved(CodexRpcMessage message) {
+        JsonNode nativeRequestId = nativeRequestId(message.params());
+        if (nativeRequestId == null) {
+            rpcClient.protocolWarning("unroutable_server_request_resolved",
+                    "serverRequest/resolved did not contain native request id", null);
+            return;
+        }
+        pendingPermissionRegistry.resolveByNativeRequestId(nativeRequestId).ifPresentOrElse(permission -> {
+            CodexSessionContext context = platformSessions.get(permission.platformSessionId());
+            if (context != null) {
+                emit(permissionResolvedEvent(context, permission), context);
+            }
+        }, () -> rpcClient.protocolWarning("unknown_server_request_resolved",
+                "serverRequest/resolved had no pending platform permission", null));
     }
 
     private void emit(AgentEvent event, CodexSessionContext context) {
@@ -295,6 +382,34 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         if (event != null) {
             eventSink.tryEmitNext(event);
         }
+    }
+
+    private AgentEvent permissionRequiredEvent(CodexSessionContext context, PendingPermission pending) {
+        return platformEvent(context, com.wangbin.ai.agent.contract.enums.AgentEventType.PERMISSION_REQUIRED,
+                new PermissionRequiredPayload(pending.permissionId(), pending.permissionType(), pending.title(),
+                        pending.reason(), pending.detail(), pending.extensions()));
+    }
+
+    private AgentEvent permissionResolvedEvent(CodexSessionContext context, PendingPermission pending) {
+        return platformEvent(context, com.wangbin.ai.agent.contract.enums.AgentEventType.PERMISSION_RESOLVED,
+                new PermissionResolvedPayload(pending.permissionId(), pending.permissionType(), pending.decision(),
+                        pending.resolutionStatus(), pending.decisionCommandId(), pending.resolvedAt(), null,
+                        pending.extensions()));
+    }
+
+    private AgentEvent warningEvent(CodexSessionContext context, String message) {
+        return platformEvent(context, com.wangbin.ai.agent.contract.enums.AgentEventType.WARNING,
+                new WarningPayload(message, Map.of(AgentEventExtensionKeys.NATIVE_METHOD, "approval")));
+    }
+
+    private AgentEvent platformEvent(CodexSessionContext context,
+                                     com.wangbin.ai.agent.contract.enums.AgentEventType type,
+                                     AgentEventPayload payload) {
+        Map<String, Object> eventExtensions = context.activePlatformCommandId() == null
+                ? Map.of() : Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, context.activePlatformCommandId());
+        return new AgentEvent(null, null, context.tenantId(), context.userId(), context.deviceId(),
+                context.projectId(), context.platformSessionId(), 0, context.agentType(), type, null, null,
+                payload, eventExtensions);
     }
 
     private void captureActiveTurn(CodexSessionContext context, JsonNode params) {
@@ -322,6 +437,21 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
             threadId = params.path("conversationId").asText(null);
         }
         return threadId == null ? null : nativeSessions.get(threadId);
+    }
+
+    private JsonNode nativeRequestId(JsonNode params) {
+        if (params == null || params.isNull()) {
+            return null;
+        }
+        JsonNode id = params.get("requestId");
+        if (id == null || id.isNull()) {
+            id = params.get("id");
+        }
+        if (id == null || id.isNull()) {
+            JsonNode request = params.get("request");
+            id = request == null || request.isNull() ? null : request.get("id");
+        }
+        return id == null || id.isNull() ? null : id.deepCopy();
     }
 
     private CodexSessionContext requireSession(String sessionId) {
@@ -414,6 +544,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         platformSessions.clear();
         nativeSessions.clear();
         activeTurnIds.clear();
+        pendingPermissionRegistry.clear();
         runtimeState = finalState == CodexRuntimeState.CRASHED ? CodexRuntimeState.STOPPED : finalState;
     }
 

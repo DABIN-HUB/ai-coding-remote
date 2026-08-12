@@ -46,6 +46,7 @@ class DefaultAgentCommandHandlerTest {
     private static final String TEST_SESSION_ID_SECOND = "ses-2";
     private static final String TEST_COMMAND_ID = "cmd-1";
     private static final String TEST_COMMAND_ID_SECOND = "cmd-2";
+    private static final String TEST_PERMISSION_ID = "perm-1";
     private static final String TEST_PROMPT = "inspect project";
 
     @Test
@@ -214,6 +215,59 @@ class DefaultAgentCommandHandlerTest {
         assertThat(adapter.sendPromptCalls).hasValue(2);
     }
 
+    @Test
+    void permissionDecisionBypassesActivePromptBusyAndDoesNotReleasePromptCommand() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(permissionCommand("cmd-perm-1", PermissionDecision.APPROVED, CommandType.APPROVE_PERMISSION),
+                credential(), outboundSender);
+        handler.handle(promptCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+
+        assertThat(adapter.resolvePermissionCalls).hasValue(1);
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.ACCEPTED, CommandAckStatus.REJECTED);
+        assertThat(outboundSender.acks.get(2).code()).isEqualTo("SESSION_BUSY");
+    }
+
+    @Test
+    void duplicatePermissionDecisionCommandDoesNotResolveNativeRequestTwice() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+        AgentCommand permission = permissionCommand("cmd-perm-1", PermissionDecision.REJECTED,
+                CommandType.REJECT_PERMISSION);
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(permission, credential(), outboundSender);
+        handler.handle(permission, credential(), outboundSender);
+
+        assertThat(adapter.resolvePermissionCalls).hasValue(1);
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.ACCEPTED, CommandAckStatus.DUPLICATE);
+    }
+
+    @Test
+    void permissionDecisionFailureReturnsFailedAck() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        adapter.failResolvePermission = true;
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(permissionCommand("cmd-perm-1", PermissionDecision.CANCELLED, CommandType.REJECT_PERMISSION),
+                credential(), outboundSender);
+
+        assertThat(adapter.resolvePermissionCalls).hasValue(1);
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.FAILED);
+    }
+
     private AgentCommand promptCommand(String commandId) {
         return promptCommand(commandId, TEST_SESSION_ID, TEST_DEVICE_ID);
     }
@@ -227,6 +281,13 @@ class DefaultAgentCommandHandlerTest {
                 TEST_PROJECT_ID, sessionId, AgentType.CODEX, CommandType.PROMPT,
                 new PromptCommandPayload(TEST_PROMPT, Map.of()), Instant.now(), Instant.now().plusSeconds(30),
                 Map.of());
+    }
+
+    private AgentCommand permissionCommand(String commandId, PermissionDecision decision, CommandType commandType) {
+        return new AgentCommand(commandId, commandId, TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, AgentType.CODEX, commandType,
+                new PermissionDecisionCommandPayload(TEST_PERMISSION_ID, decision, "reason", Map.of()),
+                Instant.now(), Instant.now().plusSeconds(30), Map.of());
     }
 
     private DeviceCredentialState credential() {
@@ -356,8 +417,10 @@ class DefaultAgentCommandHandlerTest {
 
         private final AtomicInteger startSessionCalls = new AtomicInteger();
         private final AtomicInteger sendPromptCalls = new AtomicInteger();
+        private final AtomicInteger resolvePermissionCalls = new AtomicInteger();
         private final Sinks.Many<AgentEvent> eventSink = Sinks.many().multicast().directBestEffort();
         private boolean failSendPrompt;
+        private boolean failResolvePermission;
 
         @Override
         public AgentType agentType() {
@@ -390,7 +453,12 @@ class DefaultAgentCommandHandlerTest {
         }
 
         @Override
-        public void resolvePermission(String sessionId, String permissionId, PermissionDecision decision) {
+        public void resolvePermission(String sessionId, String permissionId, PermissionDecision decision,
+                                      String decisionCommandId) {
+            resolvePermissionCalls.incrementAndGet();
+            if (failResolvePermission) {
+                throw new IllegalStateException("resolve failed");
+            }
         }
 
         @Override

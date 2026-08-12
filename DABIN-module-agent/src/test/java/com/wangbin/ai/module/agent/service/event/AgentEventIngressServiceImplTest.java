@@ -8,11 +8,15 @@ import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.EventPriority;
+import com.wangbin.ai.agent.contract.enums.PermissionDecision;
+import com.wangbin.ai.agent.contract.enums.PermissionType;
 import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
+import com.wangbin.ai.agent.contract.event.PermissionRequiredPayload;
+import com.wangbin.ai.agent.contract.permission.CommandExecutionPermissionDetail;
 import com.wangbin.ai.module.agent.dal.dataobject.command.AgentCommandDO;
 import com.wangbin.ai.module.agent.dal.dataobject.device.AgentDeviceDO;
 import com.wangbin.ai.module.agent.dal.dataobject.message.AgentMessageDO;
@@ -26,6 +30,7 @@ import com.wangbin.ai.module.agent.dal.mysql.session.AgentSessionMapper;
 import com.wangbin.ai.module.agent.enums.AgentCommandDbStatus;
 import com.wangbin.ai.module.agent.enums.AgentSessionDbStatus;
 import com.wangbin.ai.module.agent.framework.id.AgentIdFactory;
+import com.wangbin.ai.module.agent.service.permission.AgentPermissionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -51,6 +56,7 @@ class AgentEventIngressServiceImplTest {
     private static final String TEST_CONTENT = "final answer";
     private static final String TEST_NATIVE_ITEM_ID = "item-1";
     private static final String TEST_COMMAND_ID = "cmd-1";
+    private static final String TEST_PERMISSION_ID = "perm-1";
     private static final String TEST_ERROR_MESSAGE_ID = "msg-error-1";
     private static final String TEST_RELAY_NODE_ID = "relay-1";
     private static final String TEST_CONNECTION_ID = "conn-1";
@@ -61,13 +67,14 @@ class AgentEventIngressServiceImplTest {
     private final AgentProjectMapper projectMapper = mock(AgentProjectMapper.class);
     private final AgentMessageMapper messageMapper = mock(AgentMessageMapper.class);
     private final AgentIdFactory idFactory = mock(AgentIdFactory.class);
+    private final AgentPermissionService permissionService = mock(AgentPermissionService.class);
     private AgentEventIngressServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new AgentEventIngressServiceImpl(sessionMapper, commandMapper, deviceMapper, projectMapper,
                 messageMapper,
-                new AgentEventReliabilityPolicy(), idFactory);
+                new AgentEventReliabilityPolicy(), idFactory, permissionService);
     }
 
     @Test
@@ -258,6 +265,27 @@ class AgentEventIngressServiceImplTest {
         assertThat(command.getCommandStatus()).isEqualTo(AgentCommandDbStatus.ACKED.name());
         assertThat(command.getAckedTime()).isNotNull();
         verify(commandMapper).updateById(command);
+    }
+
+    @Test
+    void permissionRequiredPersistsThroughPermissionServiceAndMovesSessionToWaitingPermission() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO command = command(AgentCommandDbStatus.RUNNING);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(command);
+
+        service.handleAgentEvent(payload(event(AgentEventType.PERMISSION_REQUIRED, 1,
+                new PermissionRequiredPayload(TEST_PERMISSION_ID, PermissionType.COMMAND_EXECUTION,
+                        "Command approval required", "reason",
+                        new CommandExecutionPermissionDetail("item-1", "turn-1", "git status", ".", "reason",
+                                null, java.util.List.of(PermissionDecision.APPROVED, PermissionDecision.REJECTED),
+                                Map.of()),
+                        Map.of()),
+                TEST_COMMAND_ID)));
+
+        verify(permissionService).handlePermissionRequired(eq(session), any(), eq(TEST_COMMAND_ID), any());
+        assertThat(session.getSessionStatus()).isEqualTo(AgentSessionDbStatus.WAITING_PERMISSION.name());
+        assertThat(command.getCommandStatus()).isEqualTo(AgentCommandDbStatus.RUNNING.name());
     }
 
     private AgentSessionDO session(Long lastEventSeq) {
