@@ -3,6 +3,7 @@ package com.wangbin.ai.agent.daemon.event;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
+import com.wangbin.ai.agent.contract.event.DiffUpdatedPayload;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Component;
@@ -28,6 +29,7 @@ public class DeltaEventAggregator {
     private final int maxChars;
     private final ScheduledExecutorService scheduler;
     private final Map<String, Buffer> buffers = new HashMap<>();
+    private final Map<String, DiffBuffer> diffBuffers = new HashMap<>();
     private final Set<String> completedMessageKeys = new HashSet<>();
 
     public DeltaEventAggregator(AgentDaemonProperties properties, ScheduledExecutorService agentEventScheduler) {
@@ -51,6 +53,14 @@ public class DeltaEventAggregator {
             }
             return List.of();
         }
+        if (event.type() == AgentEventType.DIFF_UPDATED
+                && event.payload() instanceof DiffUpdatedPayload payload) {
+            String key = diffKey(event, payload);
+            DiffBuffer buffer = diffBuffers.computeIfAbsent(key, ignored -> new DiffBuffer(timedFlushConsumer));
+            buffer.latest = copyWithSeq(event, 0);
+            scheduleDiffFlush(key, buffer);
+            return List.of();
+        }
         if (event.type() == AgentEventType.AGENT_MESSAGE
                 && event.payload() instanceof AgentMessagePayload payload) {
             String key = event.sessionId() + ":" + payload.messageId();
@@ -69,6 +79,11 @@ public class DeltaEventAggregator {
             flushed.add(copyWithSeq(event, 0));
             return flushed;
         }
+        if (event.type() == AgentEventType.CHANGE_SET_FINALIZED) {
+            List<AgentEvent> flushed = flushSession(event.sessionId(), sequenceSupplier, timedFlushConsumer);
+            flushed.add(copyWithSeq(event, 0));
+            return flushed;
+        }
         return List.of(copyWithSeq(event, 0));
     }
 
@@ -83,6 +98,16 @@ public class DeltaEventAggregator {
             if (buffer != null && !buffer.pendingDelta.isEmpty()) {
                 buffer.cancelTimer();
                 result.add(toDeltaEvent(buffer, buffer.pendingDelta.toString()));
+            }
+        }
+        List<String> diffKeys = diffBuffers.keySet().stream()
+                .filter(key -> key.startsWith(sessionId + ":"))
+                .toList();
+        for (String key : diffKeys) {
+            DiffBuffer buffer = diffBuffers.remove(key);
+            if (buffer != null && buffer.latest != null) {
+                buffer.cancelTimer();
+                result.add(buffer.latest);
             }
         }
         return result;
@@ -128,11 +153,26 @@ public class DeltaEventAggregator {
                 event.priority(), event.timestamp(), event.payload(), event.extensions());
     }
 
+    private String diffKey(AgentEvent event, DiffUpdatedPayload payload) {
+        String changeSetId = payload.changeSetId();
+        if (changeSetId == null || changeSetId.isBlank()) {
+            return event.sessionId() + ":diff";
+        }
+        return event.sessionId() + ":diff:" + changeSetId;
+    }
+
     private void scheduleFlush(String key, Buffer buffer) {
         if (buffer.scheduledFuture != null && !buffer.scheduledFuture.isDone()) {
             return;
         }
         buffer.scheduledFuture = scheduler.schedule(() -> flushTimed(key), window.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private void scheduleDiffFlush(String key, DiffBuffer buffer) {
+        if (buffer.scheduledFuture != null && !buffer.scheduledFuture.isDone()) {
+            return;
+        }
+        buffer.scheduledFuture = scheduler.schedule(() -> flushDiffTimed(key), window.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void flushTimed(String key) {
@@ -149,10 +189,27 @@ public class DeltaEventAggregator {
         consumer.accept(event);
     }
 
+    private void flushDiffTimed(String key) {
+        AgentEvent event;
+        Consumer<AgentEvent> consumer;
+        synchronized (this) {
+            DiffBuffer buffer = diffBuffers.remove(key);
+            if (buffer == null || buffer.latest == null) {
+                return;
+            }
+            buffer.cancelTimer();
+            event = buffer.latest;
+            consumer = buffer.timedFlushConsumer;
+        }
+        consumer.accept(event);
+    }
+
     @PreDestroy
     public synchronized void shutdown() {
         buffers.values().forEach(Buffer::cancelTimer);
         buffers.clear();
+        diffBuffers.values().forEach(DiffBuffer::cancelTimer);
+        diffBuffers.clear();
         completedMessageKeys.clear();
     }
 
@@ -168,6 +225,24 @@ public class DeltaEventAggregator {
         private Buffer(AgentEvent seed, LongSupplier sequenceSupplier, Consumer<AgentEvent> timedFlushConsumer) {
             this.seed = seed;
             this.sequenceSupplier = sequenceSupplier;
+            this.timedFlushConsumer = timedFlushConsumer;
+        }
+
+        private void cancelTimer() {
+            if (scheduledFuture != null) {
+                scheduledFuture.cancel(false);
+                scheduledFuture = null;
+            }
+        }
+    }
+
+    private static class DiffBuffer {
+
+        private final Consumer<AgentEvent> timedFlushConsumer;
+        private AgentEvent latest;
+        private ScheduledFuture<?> scheduledFuture;
+
+        private DiffBuffer(Consumer<AgentEvent> timedFlushConsumer) {
             this.timedFlushConsumer = timedFlushConsumer;
         }
 

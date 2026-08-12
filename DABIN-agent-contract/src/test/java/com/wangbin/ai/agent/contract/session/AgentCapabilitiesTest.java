@@ -14,7 +14,7 @@ class AgentCapabilitiesTest {
         assertThat(capabilities.resumeSession()).isFalse();
         assertThat(capabilities.permission()).isTrue();
         assertThat(capabilities.terminal()).isFalse();
-        assertThat(capabilities.fileDiff()).isFalse();
+        assertThat(capabilities.fileDiff()).isTrue();
         assertThat(capabilities.plan()).isFalse();
         assertThat(capabilities.imageInput()).isFalse();
         assertThat(capabilities.cancel()).isFalse();

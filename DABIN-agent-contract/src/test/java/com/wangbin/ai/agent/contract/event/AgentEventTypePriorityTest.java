@@ -15,11 +15,14 @@ class AgentEventTypePriorityTest {
         assertThat(AgentEventType.TASK_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.ERROR.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.SESSION_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
+        assertThat(AgentEventType.CHANGE_SET_FINALIZED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
     }
 
     @Test
     void shouldAllowTransientDeltaToBeDroppedOrMerged() {
         assertThat(AgentEventType.AGENT_MESSAGE_DELTA.defaultPriority()).isEqualTo(EventPriority.TRANSIENT);
+        assertThat(AgentEventType.FILE_CHANGED.defaultPriority()).isEqualTo(EventPriority.NORMAL);
+        assertThat(AgentEventType.DIFF_UPDATED.defaultPriority()).isEqualTo(EventPriority.NORMAL);
     }
 
 }

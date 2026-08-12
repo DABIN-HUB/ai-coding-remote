@@ -43,4 +43,10 @@ public interface ErrorCodeConstants {
     ErrorCode PERMISSION_DEVICE_OFFLINE = new ErrorCode(1_020_000_037, "Permission device is offline");
     ErrorCode PERMISSION_DISPATCH_FAILED = new ErrorCode(1_020_000_038, "Permission decision dispatch failed");
     ErrorCode PERMISSION_NOT_PENDING = new ErrorCode(1_020_000_039, "Permission request is not pending");
+    ErrorCode CHANGE_SET_NOT_EXISTS = new ErrorCode(1_020_000_040, "ChangeSet does not exist");
+    ErrorCode CHANGE_SET_ACCESS_DENIED = new ErrorCode(1_020_000_041, "ChangeSet access denied");
+    ErrorCode FILE_CHANGE_NOT_EXISTS = new ErrorCode(1_020_000_042, "FileChange does not exist");
+    ErrorCode FILE_CHANGE_ACCESS_DENIED = new ErrorCode(1_020_000_043, "FileChange access denied");
+    ErrorCode CHANGE_SET_COMMAND_MISMATCH = new ErrorCode(1_020_000_044, "ChangeSet command mismatch");
+    ErrorCode CHANGE_SET_INVALID_PAYLOAD = new ErrorCode(1_020_000_045, "ChangeSet payload is invalid");
 }

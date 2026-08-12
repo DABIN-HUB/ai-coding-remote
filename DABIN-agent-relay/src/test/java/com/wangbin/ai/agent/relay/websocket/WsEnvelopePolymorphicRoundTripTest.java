@@ -8,9 +8,15 @@ import com.wangbin.ai.agent.contract.command.AgentCommand;
 import com.wangbin.ai.agent.contract.command.PromptCommandPayload;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.enums.ChangeSetStatus;
 import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.enums.FileChangeType;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
+import com.wangbin.ai.agent.contract.event.ChangeSetFinalizedPayload;
+import com.wangbin.ai.agent.contract.event.ChangedFileSummary;
+import com.wangbin.ai.agent.contract.event.DiffUpdatedPayload;
+import com.wangbin.ai.agent.contract.event.FileChangedPayload;
 import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
 import com.wangbin.ai.agent.contract.websocket.WsMessageType;
 import org.junit.jupiter.api.Test;
@@ -60,6 +66,33 @@ class WsEnvelopePolymorphicRoundTripTest {
         assertThat(decoded.payload().type()).isEqualTo(AgentEventType.AGENT_MESSAGE);
         assertThat(decoded.payload().payload()).isInstanceOf(AgentMessagePayload.class);
         assertThat(((AgentMessagePayload) decoded.payload().payload()).content()).isEqualTo("answer");
+    }
+
+    @Test
+    void changeReviewPayloadsRoundTripInsideWsEnvelope() throws Exception {
+        AgentEvent fileChanged = AgentEvent.of("trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, 1L, AgentType.CODEX, AgentEventType.FILE_CHANGED,
+                new FileChangedPayload("src/App.java", null, FileChangeType.MODIFIED, "updated",
+                        2, 1, false, false, false, Map.of()));
+        AgentEvent diffUpdated = AgentEvent.of("trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, 2L, AgentType.CODEX, AgentEventType.DIFF_UPDATED,
+                new DiffUpdatedPayload("chg-1", "@@", "sha", false, 1, 2, 1, Map.of()));
+        AgentEvent finalized = AgentEvent.of("trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, 3L, AgentType.CODEX, AgentEventType.CHANGE_SET_FINALIZED,
+                new ChangeSetFinalizedPayload("chg-1", ChangeSetStatus.COMPLETED, 1, 2, 1, "@@", "sha",
+                        false, false,
+                        java.util.List.of(new ChangedFileSummary("src/App.java", null,
+                                FileChangeType.MODIFIED, 2, 1, false, false, false, "@@", "patch-sha")),
+                        Instant.now(), Map.of()));
+
+        assertThat(decode(WsEnvelope.of(WsMessageType.AGENT_EVENT, fileChanged), AgentEvent.class).payload()
+                .payload()).isInstanceOf(FileChangedPayload.class);
+        assertThat(decode(WsEnvelope.of(WsMessageType.AGENT_EVENT, diffUpdated), AgentEvent.class).payload()
+                .payload()).isInstanceOf(DiffUpdatedPayload.class);
+        ChangeSetFinalizedPayload decoded = (ChangeSetFinalizedPayload) decode(
+                WsEnvelope.of(WsMessageType.AGENT_EVENT, finalized), AgentEvent.class).payload().payload();
+        assertThat(decoded.files().getFirst().changeType()).isEqualTo(FileChangeType.MODIFIED);
+        assertThat(decoded.status()).isEqualTo(ChangeSetStatus.COMPLETED);
     }
 
     private <T> WsEnvelope<T> decode(WsEnvelope<T> envelope, Class<T> payloadType) throws Exception {

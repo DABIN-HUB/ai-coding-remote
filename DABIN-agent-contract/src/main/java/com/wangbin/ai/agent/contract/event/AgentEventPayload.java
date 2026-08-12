@@ -12,6 +12,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = CommandOutputPayload.class, name = "commandOutput"),
         @JsonSubTypes.Type(value = FileChangedPayload.class, name = "fileChanged"),
         @JsonSubTypes.Type(value = DiffUpdatedPayload.class, name = "diffUpdated"),
+        @JsonSubTypes.Type(value = ChangeSetFinalizedPayload.class, name = "changeSetFinalized"),
         @JsonSubTypes.Type(value = PermissionRequiredPayload.class, name = "permissionRequired"),
         @JsonSubTypes.Type(value = PermissionResolvedPayload.class, name = "permissionResolved"),
         @JsonSubTypes.Type(value = TaskCompletedPayload.class, name = "taskCompleted"),
@@ -19,6 +20,6 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = WarningPayload.class, name = "warning")
 })
 public sealed interface AgentEventPayload permits SessionPayload, AgentMessagePayload, PlanUpdatedPayload,
-        ToolEventPayload, CommandOutputPayload, FileChangedPayload, DiffUpdatedPayload, PermissionRequiredPayload,
-        PermissionResolvedPayload, TaskCompletedPayload, AgentErrorPayload, WarningPayload {
+        ToolEventPayload, CommandOutputPayload, FileChangedPayload, DiffUpdatedPayload, ChangeSetFinalizedPayload,
+        PermissionRequiredPayload, PermissionResolvedPayload, TaskCompletedPayload, AgentErrorPayload, WarningPayload {
 }

@@ -26,6 +26,7 @@ import com.wangbin.ai.agent.daemon.config.AgentCodexProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
 import com.wangbin.ai.agent.daemon.event.AgentCommandLifecyclePolicy;
 import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
+import com.wangbin.ai.agent.daemon.event.change.AgentChangeSetAccumulator;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
@@ -64,6 +65,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     private final CodexPermissionRequestMapper permissionRequestMapper;
     private final CodexPermissionDecisionMapper permissionDecisionMapper;
     private final CodexPendingPermissionRegistry pendingPermissionRegistry;
+    private final AgentChangeSetAccumulator changeSetAccumulator;
     private final DeltaEventAggregator eventAggregator;
     private final SerializedSessionEventEmitter sessionEventEmitter;
     private final ExecutorService processIoExecutor;
@@ -84,6 +86,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
                                  CodexPermissionRequestMapper permissionRequestMapper,
                                  CodexPermissionDecisionMapper permissionDecisionMapper,
                                  CodexPendingPermissionRegistry pendingPermissionRegistry,
+                                 AgentChangeSetAccumulator changeSetAccumulator,
                                  DeltaEventAggregator eventAggregator,
                                  SerializedSessionEventEmitter sessionEventEmitter,
                                  @Qualifier("agentProcessIoExecutor") ExecutorService processIoExecutor) {
@@ -95,6 +98,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         this.permissionRequestMapper = permissionRequestMapper;
         this.permissionDecisionMapper = permissionDecisionMapper;
         this.pendingPermissionRegistry = pendingPermissionRegistry;
+        this.changeSetAccumulator = changeSetAccumulator;
         this.eventAggregator = eventAggregator;
         this.sessionEventEmitter = sessionEventEmitter;
         this.processIoExecutor = processIoExecutor;
@@ -226,6 +230,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
             eventAggregator.closeSession(removed.platformSessionId(), removed::nextSeq,
                             event -> emitSequenced(event, removed))
                     .forEach(event -> emitSequenced(event, removed));
+            changeSetAccumulator.clearSession(removed.platformSessionId());
             sessionEventEmitter.releaseSession(removed.platformSessionId());
             nativeSessions.remove(removed.nativeSessionId());
             activeTurnIds.remove(sessionId);
@@ -368,8 +373,10 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
 
     private void emit(AgentEvent event, CodexSessionContext context) {
         Consumer<AgentEvent> directEmitter = timed -> emitSequenced(timed, context);
-        for (AgentEvent aggregated : eventAggregator.accept(event, context::nextSeq, directEmitter)) {
-            emitSequenced(aggregated, context);
+        for (AgentEvent changeEvent : changeSetAccumulator.accept(event, context)) {
+            for (AgentEvent aggregated : eventAggregator.accept(changeEvent, context::nextSeq, directEmitter)) {
+                emitSequenced(aggregated, context);
+            }
         }
     }
 
@@ -545,6 +552,7 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         nativeSessions.clear();
         activeTurnIds.clear();
         pendingPermissionRegistry.clear();
+        changeSetAccumulator.clear();
         runtimeState = finalState == CodexRuntimeState.CRASHED ? CodexRuntimeState.STOPPED : finalState;
     }
 

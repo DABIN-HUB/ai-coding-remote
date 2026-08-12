@@ -1,8 +1,11 @@
 package com.wangbin.ai.agent.daemon.event;
 
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
+import com.wangbin.ai.agent.contract.enums.ChangeSetStatus;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
+import com.wangbin.ai.agent.contract.event.ChangeSetFinalizedPayload;
+import com.wangbin.ai.agent.contract.event.DiffUpdatedPayload;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
@@ -34,6 +37,7 @@ class DeltaEventAggregatorTest {
     private static final String MESSAGE_B = "msg-b";
     private static final String MESSAGE_ROLE_ASSISTANT = "assistant";
     private static final String NATIVE_SESSION_ID = "native-1";
+    private static final String CHANGE_SET_ID = "chg_test";
     private static final java.time.Duration FAST_AGGREGATION_WINDOW = java.time.Duration.ofMillis(20);
     private static final int SMALL_AGGREGATION_MAX_CHARS = 5;
     private static final int LARGE_AGGREGATION_MAX_CHARS = 100;
@@ -41,6 +45,7 @@ class DeltaEventAggregatorTest {
     private static final long TIMER_SEQUENCE_BASE = 20L;
     private static final long CLOSE_SEQUENCE_BASE = 30L;
     private static final long FINAL_SEQUENCE_BASE = 40L;
+    private static final long DIFF_SEQUENCE_BASE = 50L;
     private static final long IDLE_INPUT_SEQUENCE = 99L;
     private static final long AWAIT_TIMEOUT_SECONDS = 1L;
 
@@ -213,6 +218,61 @@ class DeltaEventAggregatorTest {
         }
     }
 
+    @Test
+    void debouncesDiffUpdatedAndEmitsOnlyLatestSnapshot() throws Exception {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        properties.setEventAggregationWindow(FAST_AGGREGATION_WINDOW);
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
+        AtomicLong sequence = new AtomicLong(DIFF_SEQUENCE_BASE);
+        CountDownLatch latch = new CountDownLatch(1);
+        List<AgentEvent> flushed = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        try {
+            assertThat(aggregator.accept(diff("old"), sequence::incrementAndGet, event -> {
+                flushed.add(event);
+                latch.countDown();
+            })).isEmpty();
+            assertThat(aggregator.accept(diff("latest"), sequence::incrementAndGet, event -> {
+                flushed.add(event);
+                latch.countDown();
+            })).isEmpty();
+
+            assertThat(latch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+            assertThat(flushed).hasSize(1);
+            assertThat(flushed.getFirst().type()).isEqualTo(AgentEventType.DIFF_UPDATED);
+            assertThat(((DiffUpdatedPayload) flushed.getFirst().payload()).diff()).isEqualTo("latest");
+        } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
+    void flushesPendingDiffBeforeChangeSetFinalized() {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        DeltaEventAggregator aggregator = new DeltaEventAggregator(properties, scheduler);
+        AtomicLong sequence = new AtomicLong(DIFF_SEQUENCE_BASE);
+
+        try {
+            assertThat(aggregator.accept(diff("latest"), sequence::incrementAndGet, ignored -> {
+            })).isEmpty();
+
+            List<AgentEvent> finalized = aggregator.accept(changeSetFinalized(), sequence::incrementAndGet,
+                    ignored -> {
+                    });
+
+            assertThat(finalized).hasSize(2);
+            assertThat(finalized).extracting(AgentEvent::type)
+                    .containsExactly(AgentEventType.DIFF_UPDATED, AgentEventType.CHANGE_SET_FINALIZED);
+            assertThat(((DiffUpdatedPayload) finalized.getFirst().payload()).diff()).isEqualTo("latest");
+            assertThat(finalized).extracting(AgentEvent::seq)
+                    .containsExactly(0L, 0L);
+        } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
     private AgentEvent delta(String content, long seq) {
         return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
                 DEFAULT_SESSION_ID, seq, AgentType.CODEX, AgentEventType.AGENT_MESSAGE_DELTA, null, null,
@@ -241,6 +301,19 @@ class DeltaEventAggregatorTest {
         return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
                 sessionId, 0, AgentType.CODEX, AgentEventType.SESSION_STATE_CHANGED, null, null,
                 new SessionPayload(NATIVE_SESSION_ID, AgentSessionStatus.RUNNING, null, Map.of()), Map.of());
+    }
+
+    private AgentEvent diff(String diff) {
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
+                DEFAULT_SESSION_ID, 0, AgentType.CODEX, AgentEventType.DIFF_UPDATED, null, null,
+                new DiffUpdatedPayload(CHANGE_SET_ID, diff, null, false, 1, 1, 0, Map.of()), Map.of());
+    }
+
+    private AgentEvent changeSetFinalized() {
+        return new AgentEvent(null, TRACE_ID, TEST_TENANT_ID, TEST_USER_ID, DEVICE_ID, PROJECT_ID,
+                DEFAULT_SESSION_ID, 0, AgentType.CODEX, AgentEventType.CHANGE_SET_FINALIZED, null, null,
+                new ChangeSetFinalizedPayload(CHANGE_SET_ID, ChangeSetStatus.COMPLETED, 1, 1, 0, "latest",
+                        null, false, false, List.of(), null, Map.of()), Map.of());
     }
 
     private AgentEvent idle() {

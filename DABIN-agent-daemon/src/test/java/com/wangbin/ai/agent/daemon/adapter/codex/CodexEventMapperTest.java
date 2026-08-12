@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.enums.FileChangeType;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
@@ -196,7 +197,8 @@ class CodexEventMapperTest {
         assertThat(patchEvents.getFirst().type()).isEqualTo(AgentEventType.FILE_CHANGED);
         assertThat(((FileChangedPayload) patchEvents.getFirst().payload()).path()).isEqualTo("README.md");
         assertThat(completedEvents.getFirst().type()).isEqualTo(AgentEventType.FILE_CHANGED);
-        assertThat(((FileChangedPayload) completedEvents.getFirst().payload()).changeType()).isEqualTo("completed");
+        assertThat(((FileChangedPayload) completedEvents.getFirst().payload()).changeType())
+                .isEqualTo(FileChangeType.MODIFIED);
     }
 
     @Test

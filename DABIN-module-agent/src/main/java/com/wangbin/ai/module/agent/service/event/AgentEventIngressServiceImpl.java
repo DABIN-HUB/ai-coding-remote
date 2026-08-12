@@ -19,6 +19,7 @@ import com.wangbin.ai.module.agent.dal.mysql.project.AgentProjectMapper;
 import com.wangbin.ai.module.agent.dal.mysql.session.AgentSessionMapper;
 import com.wangbin.ai.module.agent.enums.*;
 import com.wangbin.ai.module.agent.framework.id.AgentIdFactory;
+import com.wangbin.ai.module.agent.service.change.AgentChangeSetService;
 import com.wangbin.ai.module.agent.service.permission.AgentPermissionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +44,7 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
     private final AgentEventReliabilityPolicy reliabilityPolicy;
     private final AgentIdFactory idFactory;
     private final AgentPermissionService permissionService;
+    private final AgentChangeSetService changeSetService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -135,6 +137,11 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
             if (AgentSessionDbStatus.WAITING_PERMISSION.name().equals(session.getSessionStatus())) {
                 session.setSessionStatus(AgentSessionDbStatus.RUNNING.name());
             }
+            return;
+        }
+        if (event.type() == AgentEventType.CHANGE_SET_FINALIZED
+                && event.payload() instanceof ChangeSetFinalizedPayload payload) {
+            changeSetService.handleChangeSetFinalized(session, event, platformCommandId, payload);
             return;
         }
         if (event.type() == AgentEventType.AGENT_MESSAGE && event.payload() instanceof AgentMessagePayload payload) {

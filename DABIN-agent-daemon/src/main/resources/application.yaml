@@ -22,3 +22,7 @@ agent:
     startup-timeout: 30s
     request-timeout: 60s
     experimental-api: true
+    change-set-max-files: 200
+    diff-snapshot-max-chars: 524288
+    file-summary-max-chars: 2048
+    file-patch-max-chars: 131072

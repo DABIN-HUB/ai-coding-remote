@@ -20,8 +20,9 @@ public enum AgentEventType {
     COMMAND_OUTPUT(EventPriority.NORMAL),
     COMMAND_COMPLETED(EventPriority.IMPORTANT),
 
-    FILE_CHANGED(EventPriority.IMPORTANT),
-    DIFF_UPDATED(EventPriority.IMPORTANT),
+    FILE_CHANGED(EventPriority.NORMAL),
+    DIFF_UPDATED(EventPriority.NORMAL),
+    CHANGE_SET_FINALIZED(EventPriority.CRITICAL),
 
     PERMISSION_REQUIRED(EventPriority.CRITICAL),
     PERMISSION_RESOLVED(EventPriority.CRITICAL),

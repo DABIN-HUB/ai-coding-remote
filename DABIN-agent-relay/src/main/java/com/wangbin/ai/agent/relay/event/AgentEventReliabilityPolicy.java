@@ -9,7 +9,9 @@ import org.springframework.stereotype.Component;
 public class AgentEventReliabilityPolicy {
 
     public boolean shouldPublishDurably(AgentEvent event) {
-        if (event == null || event.type() == AgentEventType.AGENT_MESSAGE_DELTA) {
+        if (event == null || event.type() == AgentEventType.AGENT_MESSAGE_DELTA
+                || event.type() == AgentEventType.FILE_CHANGED
+                || event.type() == AgentEventType.DIFF_UPDATED) {
             return false;
         }
         return event.priority() == EventPriority.CRITICAL || event.priority() == EventPriority.IMPORTANT;

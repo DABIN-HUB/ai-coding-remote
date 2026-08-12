@@ -24,6 +24,18 @@ public class AgentCodexProperties {
     @Min(64)
     private int permissionSnapshotMaxChars = 4096;
 
+    @Min(1)
+    private int changeSetMaxFiles = 200;
+
+    @Min(1024)
+    private int diffSnapshotMaxChars = 512 * 1024;
+
+    @Min(128)
+    private int fileSummaryMaxChars = 2048;
+
+    @Min(1024)
+    private int filePatchMaxChars = 128 * 1024;
+
     public String getExecutable() {
         return executable;
     }
@@ -70,6 +82,38 @@ public class AgentCodexProperties {
 
     public void setPermissionSnapshotMaxChars(int permissionSnapshotMaxChars) {
         this.permissionSnapshotMaxChars = permissionSnapshotMaxChars;
+    }
+
+    public int getChangeSetMaxFiles() {
+        return changeSetMaxFiles;
+    }
+
+    public void setChangeSetMaxFiles(int changeSetMaxFiles) {
+        this.changeSetMaxFiles = changeSetMaxFiles;
+    }
+
+    public int getDiffSnapshotMaxChars() {
+        return diffSnapshotMaxChars;
+    }
+
+    public void setDiffSnapshotMaxChars(int diffSnapshotMaxChars) {
+        this.diffSnapshotMaxChars = diffSnapshotMaxChars;
+    }
+
+    public int getFileSummaryMaxChars() {
+        return fileSummaryMaxChars;
+    }
+
+    public void setFileSummaryMaxChars(int fileSummaryMaxChars) {
+        this.fileSummaryMaxChars = fileSummaryMaxChars;
+    }
+
+    public int getFilePatchMaxChars() {
+        return filePatchMaxChars;
+    }
+
+    public void setFilePatchMaxChars(int filePatchMaxChars) {
+        this.filePatchMaxChars = filePatchMaxChars;
     }
 
 }

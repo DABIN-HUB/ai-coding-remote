@@ -1,6 +1,7 @@
 package com.wangbin.ai.agent.daemon.adapter.codex;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.wangbin.ai.agent.contract.enums.FileChangeType;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.event.*;
@@ -51,10 +52,12 @@ public class CodexEventMapper {
             case CodexProtocolConstants.METHOD_COMMAND_TERMINAL_INTERACTION,
                     CodexProtocolConstants.METHOD_FILE_CHANGE_OUTPUT_DELTA -> List.of();
             case CodexProtocolConstants.METHOD_FILE_CHANGE_PATCH_UPDATED -> List.of(event(context, AgentEventType.FILE_CHANGED,
-                    new FileChangedPayload(firstChangePath(params), "patch", "Codex file change patch updated",
+                    new FileChangedPayload(firstChangePath(params), null, FileChangeType.UNKNOWN,
+                            "Codex file change patch updated", null, null, false, false, false,
                             extensions(message))));
             case CodexProtocolConstants.METHOD_DIFF_UPDATED -> List.of(event(context, AgentEventType.DIFF_UPDATED,
-                    new DiffUpdatedPayload(text(params, "diff"), extensions(message))));
+                    new DiffUpdatedPayload(null, text(params, "diff"), null, false, null, null, null,
+                            extensions(message))));
             case CodexProtocolConstants.METHOD_ERROR -> List.of(errorEvent(context,
                     CodexErrorExtractor.fromErrorNotification(params), extensions(message)));
             case CodexProtocolConstants.METHOD_WARNING, CodexProtocolConstants.METHOD_GUARDIAN_WARNING,
@@ -94,8 +97,9 @@ public class CodexEventMapper {
                     new CommandOutputPayload(text(item, "id"), null, text(item, "aggregatedOutput"),
                             true, extensions(message, item))));
             case CodexProtocolConstants.ITEM_TYPE_FILE_CHANGE -> List.of(event(context, AgentEventType.FILE_CHANGED,
-                    new FileChangedPayload(firstChangePath(item), text(item, "status"),
-                            "Codex file change completed", extensions(message, item))));
+                    new FileChangedPayload(firstChangePath(item), null, mapFileChangeType(text(item, "status")),
+                            "Codex file change completed", null, null, false, false, false,
+                            extensions(message, item))));
             default -> List.of();
         };
     }
@@ -231,6 +235,19 @@ public class CodexEventMapper {
             return null;
         }
         return text(changes.get(0), "path");
+    }
+
+    private FileChangeType mapFileChangeType(String status) {
+        if (status == null || status.isBlank()) {
+            return FileChangeType.UNKNOWN;
+        }
+        return switch (status) {
+            case "added", "created", "add" -> FileChangeType.ADDED;
+            case "modified", "updated", "completed", "patch" -> FileChangeType.MODIFIED;
+            case "deleted", "removed", "delete" -> FileChangeType.DELETED;
+            case "renamed", "rename" -> FileChangeType.RENAMED;
+            default -> FileChangeType.UNKNOWN;
+        };
     }
 
 }

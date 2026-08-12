@@ -20,6 +20,11 @@ import com.wangbin.ai.agent.daemon.config.AgentCodexProperties;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.event.DeltaEventAggregator;
 import com.wangbin.ai.agent.daemon.event.SerializedSessionEventEmitter;
+import com.wangbin.ai.agent.daemon.event.change.AgentChangeSetAccumulator;
+import com.wangbin.ai.agent.daemon.event.change.DaemonChangeSetIdFactory;
+import com.wangbin.ai.agent.daemon.event.change.SensitivePathPolicy;
+import com.wangbin.ai.agent.daemon.event.change.UnifiedDiffParser;
+import com.wangbin.ai.agent.daemon.event.change.WorkspaceRelativePathNormalizer;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
@@ -371,6 +376,7 @@ class CodexAppServerAdapterTest {
         return new CodexAppServerAdapter(objectMapper, codexProperties, new TestAppServerProcess(), workspaceManager(workspace),
                 new CodexEventMapper(), new CodexPermissionRequestMapper(codexProperties, decisionMapper),
                 decisionMapper, new CodexPendingPermissionRegistry(codexProperties),
+                changeSetAccumulator(workspaceManager(workspace), codexProperties),
                 new DeltaEventAggregator(daemonProperties, scheduler),
                 new SerializedSessionEventEmitter(),
                 processIoExecutor) {
@@ -380,6 +386,15 @@ class CodexAppServerAdapterTest {
                 return remainingClients.removeFirst();
             }
         };
+    }
+
+    private AgentChangeSetAccumulator changeSetAccumulator(WorkspaceManager workspaceManager,
+                                                           AgentCodexProperties codexProperties) {
+        WorkspaceRelativePathNormalizer normalizer = new WorkspaceRelativePathNormalizer(workspaceManager);
+        SensitivePathPolicy sensitivePathPolicy = new SensitivePathPolicy();
+        return new AgentChangeSetAccumulator(normalizer,
+                new UnifiedDiffParser(normalizer, sensitivePathPolicy, codexProperties),
+                sensitivePathPolicy, new DaemonChangeSetIdFactory(), codexProperties);
     }
 
     private WorkspaceManager workspaceManager(Path workspace) {

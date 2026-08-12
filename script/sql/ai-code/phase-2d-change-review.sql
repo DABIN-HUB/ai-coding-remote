@@ -1,0 +1,56 @@
+-- Phase 2D Change Review / File Change / Diff backend schema.
+-- This file is generated for manual execution by the operator. Do not execute automatically.
+
+CREATE TABLE `ai_code_change_set` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '编号',
+  `change_set_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '变更集业务编号',
+  `session_id` bigint NOT NULL COMMENT '会话表编号',
+  `command_id` bigint NOT NULL COMMENT '触发变更的命令表编号',
+  `device_id` bigint NOT NULL COMMENT '设备表编号',
+  `project_id` bigint NOT NULL COMMENT '项目表编号',
+  `owner_user_id` bigint NOT NULL COMMENT '所属用户编号',
+  `change_status` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '变更集状态',
+  `file_count` int NOT NULL DEFAULT 0 COMMENT '变更文件数量',
+  `additions` int NOT NULL DEFAULT 0 COMMENT '新增行数',
+  `deletions` int NOT NULL DEFAULT 0 COMMENT '删除行数',
+  `diff_text` longtext COLLATE utf8mb4_unicode_ci COMMENT 'Unified Diff 快照，可能被截断或脱敏',
+  `diff_sha256` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '平台可见 Diff SHA-256',
+  `diff_truncated` bit(1) NOT NULL DEFAULT b'0' COMMENT 'Diff 是否被截断',
+  `files_truncated` bit(1) NOT NULL DEFAULT b'0' COMMENT '文件列表是否被截断',
+  `started_time` datetime DEFAULT NULL COMMENT '开始产生文件变更时间',
+  `completed_time` datetime DEFAULT NULL COMMENT '变更集完成时间',
+  `remark` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT '' COMMENT '备注',
+  `creator` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI Coding 变更集表';
+
+CREATE TABLE `ai_code_file_change` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '编号',
+  `file_change_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '文件变更业务编号',
+  `change_set_id` bigint NOT NULL COMMENT '变更集表编号',
+  `session_id` bigint NOT NULL COMMENT '会话表编号',
+  `command_id` bigint NOT NULL COMMENT '命令表编号',
+  `relative_path` varchar(1024) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Workspace 相对路径',
+  `old_relative_path` varchar(1024) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '重命名前相对路径',
+  `change_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'ADDED/MODIFIED/DELETED/RENAMED/UNKNOWN',
+  `additions` int DEFAULT NULL COMMENT '新增行数',
+  `deletions` int DEFAULT NULL COMMENT '删除行数',
+  `binary_file` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否二进制文件',
+  `patch_text` longtext COLLATE utf8mb4_unicode_ci COMMENT '当前文件 Unified Diff Patch，可能被截断或脱敏',
+  `patch_sha256` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '平台可见 Patch SHA-256',
+  `patch_truncated` bit(1) NOT NULL DEFAULT b'0' COMMENT 'Patch 是否被截断',
+  `redacted` bit(1) NOT NULL DEFAULT b'0' COMMENT '敏感文件 Patch 是否被脱敏',
+  `summary` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '文件变更摘要',
+  `creator` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI Coding 文件变更表';

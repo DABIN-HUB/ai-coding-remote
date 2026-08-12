@@ -12,7 +12,9 @@ public class AgentEventReliabilityPolicy {
         if (event == null || event.type() == null) {
             return false;
         }
-        if (event.type() == AgentEventType.AGENT_MESSAGE_DELTA) {
+        if (event.type() == AgentEventType.AGENT_MESSAGE_DELTA
+                || event.type() == AgentEventType.FILE_CHANGED
+                || event.type() == AgentEventType.DIFF_UPDATED) {
             return false;
         }
         return event.priority() == EventPriority.CRITICAL || event.priority() == EventPriority.IMPORTANT;
