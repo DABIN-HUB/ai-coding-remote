@@ -227,6 +227,12 @@ export interface SessionControlTimeoutPayload {
   reason?: string
 }
 
+export interface SessionPayload {
+  nativeSessionId?: string
+  status?: string
+  reason?: string
+}
+
 export interface AgentMessagePayload {
   content?: string
   delta?: string
@@ -250,4 +256,26 @@ export interface ChangeSetFinalizedPayload {
   diffTruncated?: boolean
   filesTruncated?: boolean
   files?: FileChange[]
+}
+
+export interface FileChangedPayload {
+  path?: string
+  oldPath?: string
+  changeType?: string
+  summary?: string
+  additions?: number
+  deletions?: number
+  binary?: boolean
+  truncated?: boolean
+  redacted?: boolean
+}
+
+export interface DiffUpdatedPayload {
+  changeSetId?: string
+  diff?: string
+  diffSha256?: string
+  truncated?: boolean
+  fileCount?: number
+  additions?: number
+  deletions?: number
 }

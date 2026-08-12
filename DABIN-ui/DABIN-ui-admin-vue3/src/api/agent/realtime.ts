@@ -74,8 +74,7 @@ export class AgentRealtimeClient {
     if (configured) {
       return configured
     }
-    const base = import.meta.env.VITE_BASE_URL || window.location.origin
-    return `${base.replace(/^http/, 'ws')}/agent/ws`
+    return `${window.location.origin.replace(/^http/, 'ws')}/agent/ws`
   }
 
   private sendEnvelope(envelope: Partial<WsEnvelope>) {
