@@ -8,11 +8,13 @@ import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentEventPayload;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.PermissionRequiredPayload;
 import com.wangbin.ai.agent.contract.event.PermissionResolvedPayload;
+import com.wangbin.ai.agent.contract.event.SessionControlTimeoutPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.event.WarningPayload;
 import com.wangbin.ai.agent.contract.session.AgentCapabilities;
@@ -263,6 +265,15 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
         }
     }
 
+    @Override
+    public void emitSessionControlTimeout(String sessionId, String targetCommandId, String controlCommandId,
+                                          SessionControlAction action, String reason) {
+        CodexSessionContext context = platformSessions.get(sessionId);
+        if (context != null) {
+            emit(sessionControlTimeoutEvent(context, targetCommandId, controlCommandId, action, reason), context);
+        }
+    }
+
     private synchronized void ensureStarted(Path workspace) {
         if (runtimeState == CodexRuntimeState.READY
                 && managedProcess != null
@@ -425,6 +436,20 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
                 context.projectId(), context.platformSessionId(), 0, context.agentType(), AgentEventType.SESSION_COMPLETED,
                 null, null, new SessionPayload(context.nativeSessionId(), AgentSessionStatus.COMPLETED,
                 "session closed locally", Map.of()), extensions);
+    }
+
+    private AgentEvent sessionControlTimeoutEvent(CodexSessionContext context, String targetCommandId,
+                                                  String controlCommandId, SessionControlAction action,
+                                                  String reason) {
+        Map<String, Object> extensions = targetCommandId == null || targetCommandId.isBlank()
+                ? Map.of()
+                : Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, targetCommandId);
+        return new AgentEvent(null, null, context.tenantId(), context.userId(), context.deviceId(),
+                context.projectId(), context.platformSessionId(), 0, context.agentType(),
+                AgentEventType.SESSION_CONTROL_TIMEOUT, null, null,
+                new SessionControlTimeoutPayload(targetCommandId, controlCommandId, action, Instant.now(), reason,
+                        Map.of()),
+                extensions);
     }
 
     private AgentEvent warningEvent(CodexSessionContext context, String message) {

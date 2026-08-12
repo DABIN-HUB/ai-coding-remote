@@ -24,6 +24,7 @@ import com.wangbin.ai.agent.contract.event.ChangeSetFinalizedPayload;
 import com.wangbin.ai.agent.contract.event.ChangedFileSummary;
 import com.wangbin.ai.agent.contract.event.DiffUpdatedPayload;
 import com.wangbin.ai.agent.contract.event.FileChangedPayload;
+import com.wangbin.ai.agent.contract.event.SessionControlTimeoutPayload;
 import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
 import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
 import com.wangbin.ai.agent.contract.websocket.WsMessageType;
@@ -151,6 +152,23 @@ class WsEnvelopePolymorphicRoundTripTest {
 
         assertThat(decoded.payload().type()).isEqualTo(AgentEventType.SESSION_INTERRUPTED);
         SessionInterruptedPayload payload = (SessionInterruptedPayload) decoded.payload().payload();
+        assertThat(payload.action()).isEqualTo(SessionControlAction.CANCEL);
+        assertThat(payload.targetCommandId()).isEqualTo(TEST_COMMAND_ID);
+        assertThat(payload.controlCommandId()).isEqualTo("cmd-cancel-1");
+    }
+
+    @Test
+    void sessionControlTimeoutPayloadRoundTripsInsideWsEnvelope() throws Exception {
+        AgentEvent event = AgentEvent.of("trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID,
+                TEST_SESSION_ID, 5L, AgentType.CODEX, AgentEventType.SESSION_CONTROL_TIMEOUT,
+                new SessionControlTimeoutPayload(TEST_COMMAND_ID, "cmd-cancel-1", SessionControlAction.CANCEL,
+                        Instant.now(), "timeout", Map.of()));
+
+        WsEnvelope<AgentEvent> decoded = decode(WsEnvelope.of(WsMessageType.AGENT_EVENT, event), AgentEvent.class);
+
+        assertThat(decoded.payload().type()).isEqualTo(AgentEventType.SESSION_CONTROL_TIMEOUT);
+        assertThat(decoded.payload().payload()).isInstanceOf(SessionControlTimeoutPayload.class);
+        SessionControlTimeoutPayload payload = (SessionControlTimeoutPayload) decoded.payload().payload();
         assertThat(payload.action()).isEqualTo(SessionControlAction.CANCEL);
         assertThat(payload.targetCommandId()).isEqualTo(TEST_COMMAND_ID);
         assertThat(payload.controlCommandId()).isEqualTo("cmd-cancel-1");

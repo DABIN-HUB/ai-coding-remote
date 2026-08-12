@@ -82,6 +82,13 @@ public interface FileService {
     void deleteFile(Long id) throws Exception;
 
     /**
+     * 幂等删除文件。文件记录已不存在时视为删除已完成。
+     *
+     * @param id 编号
+     */
+    void deleteFileIfExists(Long id) throws Exception;
+
+    /**
      * 批量删除文件
      *
      * @param ids 编号列表

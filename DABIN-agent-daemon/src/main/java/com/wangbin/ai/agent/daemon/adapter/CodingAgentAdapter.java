@@ -2,6 +2,7 @@ package com.wangbin.ai.agent.daemon.adapter;
 
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.session.AgentCapabilities;
 import com.wangbin.ai.agent.contract.session.AgentSession;
@@ -32,6 +33,10 @@ public interface CodingAgentAdapter {
 
     default void closeSession(String sessionId, String controlCommandId) {
         closeSession(sessionId);
+    }
+
+    default void emitSessionControlTimeout(String sessionId, String targetCommandId, String controlCommandId,
+                                           SessionControlAction action, String reason) {
     }
 
 }

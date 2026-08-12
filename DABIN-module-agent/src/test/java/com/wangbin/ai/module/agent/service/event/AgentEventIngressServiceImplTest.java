@@ -18,6 +18,7 @@ import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
+import com.wangbin.ai.agent.contract.event.SessionControlTimeoutPayload;
 import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.event.PermissionRequiredPayload;
@@ -368,6 +369,54 @@ class AgentEventIngressServiceImplTest {
         assertThat(closeCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.SUCCEEDED.name());
         assertThat(session.getSessionStatus()).isEqualTo(AgentSessionDbStatus.CLOSED.name());
         assertThat(session.getClosedTime()).isNotNull();
+    }
+
+    @Test
+    void sessionInterruptedCloseCancelsPromptButDoesNotCompleteCloseCommandUntilSessionCompleted() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO promptCommand = command(AgentCommandDbStatus.RUNNING);
+        AgentCommandDO closeCommand = command("cmd-close-1", 203L, AgentCommandDbStatus.RUNNING);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(promptCommand);
+        when(commandMapper.selectByCommandId("cmd-close-1")).thenReturn(closeCommand);
+
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_INTERRUPTED, 1,
+                new SessionInterruptedPayload("native-1", TEST_COMMAND_ID, "cmd-close-1",
+                        SessionControlAction.CLOSE_SESSION, null, "close", Map.of()), TEST_COMMAND_ID)));
+
+        assertThat(promptCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.CANCELLED.name());
+        assertThat(closeCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.RUNNING.name());
+
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_COMPLETED, 2,
+                new SessionPayload("native-1", AgentSessionStatus.COMPLETED, null, Map.of()), "cmd-close-1")));
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_IDLE, 3,
+                new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()), TEST_COMMAND_ID)));
+
+        assertThat(promptCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.CANCELLED.name());
+        assertThat(closeCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.SUCCEEDED.name());
+        assertThat(session.getSessionStatus()).isEqualTo(AgentSessionDbStatus.CLOSED.name());
+        assertThat(session.getLastEventSeq()).isEqualTo(3L);
+    }
+
+    @Test
+    void sessionControlTimeoutMarksOnlyControlCommandTimedOutAndLateTerminalKeepsTimeout() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO promptCommand = command(AgentCommandDbStatus.RUNNING);
+        AgentCommandDO controlCommand = command("cmd-cancel-2", 204L, AgentCommandDbStatus.RUNNING);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(promptCommand);
+        when(commandMapper.selectByCommandId("cmd-cancel-2")).thenReturn(controlCommand);
+
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_CONTROL_TIMEOUT, 1,
+                new SessionControlTimeoutPayload(TEST_COMMAND_ID, "cmd-cancel-2", SessionControlAction.CANCEL,
+                        null, "timeout", Map.of()), TEST_COMMAND_ID)));
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_INTERRUPTED, 2,
+                new SessionInterruptedPayload("native-1", TEST_COMMAND_ID, "cmd-cancel-2",
+                        SessionControlAction.CANCEL, null, "late cancel", Map.of()), TEST_COMMAND_ID)));
+
+        assertThat(controlCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.TIMEOUT.name());
+        assertThat(promptCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.CANCELLED.name());
+        assertThat(session.getSessionStatus()).isEqualTo(AgentSessionDbStatus.IDLE.name());
     }
 
     private AgentSessionDO session(Long lastEventSeq) {

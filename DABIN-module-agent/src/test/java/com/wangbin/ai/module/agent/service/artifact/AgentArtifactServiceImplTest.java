@@ -85,6 +85,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -377,9 +378,30 @@ class AgentArtifactServiceImplTest {
         AgentArtifactDO failedDelete = artifact(ArtifactStatus.READY);
         failedDelete.setFileId(TEST_FILE_ID + 1);
         when(artifactMapper.selectExpiredReady(any(LocalDateTime.class), eq(50))).thenReturn(List.of(failedDelete));
-        doThrow(new IllegalStateException("delete failed")).when(fileApi).deleteFile(TEST_FILE_ID + 1);
+        doThrow(new IllegalStateException("delete failed")).when(fileApi).deleteFileIfExists(TEST_FILE_ID + 1);
         assertThat(service.cleanupExpired()).isZero();
         assertThat(failedDelete.getArtifactStatus()).isEqualTo(ArtifactStatus.READY.name());
+    }
+
+    @Test
+    void cleanupUsesIdempotentFileDeleteAndConvergesAfterArtifactUpdateFailure() throws Exception {
+        AgentArtifactDO artifact = artifact(ArtifactStatus.READY);
+        artifact.setFileId(TEST_FILE_ID);
+        artifact.setExpireTime(LocalDateTime.now().minusMinutes(1));
+        when(artifactMapper.selectExpiredReady(any(LocalDateTime.class), eq(50))).thenReturn(List.of(artifact));
+        doThrow(new IllegalStateException("db failed"))
+                .doAnswer(invocation -> {
+                    artifactStore.set(invocation.getArgument(0));
+                    return 1;
+                })
+                .when(artifactMapper).updateById(artifact);
+
+        assertThat(service.cleanupExpired()).isZero();
+        artifact.setArtifactStatus(ArtifactStatus.READY.name());
+        assertThat(service.cleanupExpired()).isEqualTo(1);
+
+        verify(fileApi, times(2)).deleteFileIfExists(TEST_FILE_ID);
+        assertThat(artifact.getArtifactStatus()).isEqualTo(ArtifactStatus.EXPIRED.name());
     }
 
     @Test
@@ -391,7 +413,7 @@ class AgentArtifactServiceImplTest {
 
         assertThat(service.cleanupExpired()).isZero();
 
-        verify(fileApi, never()).deleteFile(TEST_FILE_ID);
+        verify(fileApi, never()).deleteFileIfExists(TEST_FILE_ID);
         verify(redissonClient).getLock(AgentCoordinationKeys.artifactCleanupLock(TEST_TENANT_ID, TEST_ARTIFACT_ID));
     }
 

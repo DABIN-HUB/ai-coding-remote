@@ -288,7 +288,7 @@ public class AgentArtifactServiceImpl implements AgentArtifactService {
                 continue;
             }
             try {
-                fileApi.deleteFile(artifact.getFileId());
+                fileApi.deleteFileIfExists(artifact.getFileId());
                 artifact.setArtifactStatus(ArtifactStatus.EXPIRED.name());
                 artifactMapper.updateById(artifact);
                 count++;

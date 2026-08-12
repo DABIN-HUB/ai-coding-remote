@@ -29,6 +29,10 @@ public class AgentDaemonProperties {
     @Min(1)
     private int sessionControlIntentCapacity = 128;
 
+    private Duration sessionControlTerminalTimeout = Duration.ofSeconds(30);
+
+    private Duration sessionControlTimedOutCorrelationTtl = Duration.ofMinutes(2);
+
     private Duration commandDedupTtl = Duration.ofMinutes(45);
 
     @Min(1)
@@ -81,6 +85,22 @@ public class AgentDaemonProperties {
 
     public void setSessionControlIntentCapacity(int sessionControlIntentCapacity) {
         this.sessionControlIntentCapacity = sessionControlIntentCapacity;
+    }
+
+    public Duration getSessionControlTerminalTimeout() {
+        return sessionControlTerminalTimeout;
+    }
+
+    public void setSessionControlTerminalTimeout(Duration sessionControlTerminalTimeout) {
+        this.sessionControlTerminalTimeout = sessionControlTerminalTimeout;
+    }
+
+    public Duration getSessionControlTimedOutCorrelationTtl() {
+        return sessionControlTimedOutCorrelationTtl;
+    }
+
+    public void setSessionControlTimedOutCorrelationTtl(Duration sessionControlTimedOutCorrelationTtl) {
+        this.sessionControlTimedOutCorrelationTtl = sessionControlTimedOutCorrelationTtl;
     }
 
     public Duration getCommandDedupTtl() {

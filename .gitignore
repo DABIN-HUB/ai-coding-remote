@@ -4,6 +4,8 @@
 /build/
 !gradle/wrapper/gradle-wrapper.jar
 
+DABIN-ui/DABIN-ui-admin-vue3/.codex-tmp
+
 target/
 !.mvn/wrapper/maven-wrapper.jar
 

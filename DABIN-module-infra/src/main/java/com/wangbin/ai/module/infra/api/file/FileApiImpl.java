@@ -54,6 +54,11 @@ public class FileApiImpl implements FileApi {
     }
 
     @Override
+    public void deleteFileIfExists(Long id) throws Exception {
+        fileService.deleteFileIfExists(id);
+    }
+
+    @Override
     public String presignGetUrl(String url, Integer expirationSeconds) {
         return fileService.presignGetUrl(url, expirationSeconds);
     }

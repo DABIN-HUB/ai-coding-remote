@@ -232,6 +232,19 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
+    public void deleteFileIfExists(Long id) throws Exception {
+        FileDO file = fileMapper.selectById(id);
+        if (file == null) {
+            return;
+        }
+        FilePathUtils.validatePath(file.getPath());
+        FileClient client = fileConfigService.getFileClient(file.getConfigId());
+        Assert.notNull(client, "瀹㈡埛绔?{}) 涓嶈兘涓虹┖", file.getConfigId());
+        client.delete(file.getPath());
+        fileMapper.deleteById(id);
+    }
+
+    @Override
     @SneakyThrows
     public void deleteFileList(List<Long> ids) {
         // 删除文件

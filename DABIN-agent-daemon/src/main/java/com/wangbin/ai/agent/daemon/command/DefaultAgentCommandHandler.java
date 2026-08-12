@@ -24,6 +24,7 @@ import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
@@ -32,6 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class DefaultAgentCommandHandler implements AgentCommandHandler {
@@ -55,6 +58,7 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     private final WorkspaceManager workspaceManager;
     private final ArtifactTransferManager artifactTransferManager;
     private final SessionControlIntentRegistry controlIntentRegistry;
+    private final ScheduledExecutorService eventScheduler;
     private final ConcurrentMap<String, CodingAgentAdapter> sessionAdapters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> activeSessionCommands = new ConcurrentHashMap<>();
 
@@ -62,26 +66,28 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     public DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
                                       CommandDedupCache dedupCache, WorkspaceManager workspaceManager,
                                       ArtifactTransferManager artifactTransferManager,
-                                      SessionControlIntentRegistry controlIntentRegistry) {
+                                      SessionControlIntentRegistry controlIntentRegistry,
+                                      @Qualifier("agentEventScheduler") ScheduledExecutorService eventScheduler) {
         this.adapters = adapters;
         this.localProjectRegistry = localProjectRegistry;
         this.dedupCache = dedupCache;
         this.workspaceManager = workspaceManager;
         this.artifactTransferManager = artifactTransferManager;
         this.controlIntentRegistry = controlIntentRegistry;
+        this.eventScheduler = eventScheduler;
     }
 
     DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
                                CommandDedupCache dedupCache, WorkspaceManager workspaceManager) {
         this(adapters, localProjectRegistry, dedupCache, workspaceManager, null,
-                new SessionControlIntentRegistry(128));
+                new SessionControlIntentRegistry(128), null);
     }
 
     DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
                                CommandDedupCache dedupCache, WorkspaceManager workspaceManager,
                                ArtifactTransferManager artifactTransferManager) {
         this(adapters, localProjectRegistry, dedupCache, workspaceManager, artifactTransferManager,
-                new SessionControlIntentRegistry(128));
+                new SessionControlIntentRegistry(128), null);
     }
 
     @Override
@@ -349,6 +355,7 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
             outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
                     CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "session control accepted", Instant.now(), Map.of()));
             dedupCache.markCompleted(command.commandId());
+            scheduleControlTimeoutCheck(command.sessionId(), targetCommandId);
         } catch (RuntimeException ex) {
             controlIntentRegistry.consume(command.sessionId(), targetCommandId);
             log.warn("session control failed: sessionId={}, commandId={}, errorType={}, error={}",
@@ -358,14 +365,37 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
         }
     }
 
+    private void scheduleControlTimeoutCheck(String sessionId, String targetCommandId) {
+        if (eventScheduler == null) {
+            return;
+        }
+        long delayMillis = controlIntentRegistry.terminalTimeoutMillis();
+        eventScheduler.schedule(() -> emitTimedOutControls(sessionId, targetCommandId),
+                delayMillis, TimeUnit.MILLISECONDS);
+    }
+
+    private void emitTimedOutControls(String sessionId, String targetCommandId) {
+        controlIntentRegistry.timeoutIfExpired(sessionId, targetCommandId, Instant.now()).ifPresent(intent -> {
+            CodingAgentAdapter adapter = sessionAdapters.get(sessionId);
+            if (adapter != null) {
+                adapter.emitSessionControlTimeout(sessionId, intent.targetCommandId(), intent.controlCommandId(),
+                        intent.action(), "session control terminal timeout");
+            }
+        });
+    }
+
     private void closeIdleSession(AgentCommand command, CodingAgentAdapter adapter, DaemonOutboundSender outboundSender) {
         try {
             adapter.cancelPendingPermissions(command.sessionId());
+            CommandAck accepted = new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "session close accepted", Instant.now(), Map.of());
+            if (!outboundSender.sendCommandAck(accepted)) {
+                dedupCache.release(command.commandId());
+                return;
+            }
             adapter.closeSession(command.sessionId(), command.commandId());
             sessionAdapters.remove(command.sessionId(), adapter);
             controlIntentRegistry.clearSession(command.sessionId());
-            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
-                    CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "session close accepted", Instant.now(), Map.of()));
             dedupCache.markCompleted(command.commandId());
         } catch (RuntimeException ex) {
             log.warn("idle session close failed: sessionId={}, commandId={}, errorType={}, error={}",

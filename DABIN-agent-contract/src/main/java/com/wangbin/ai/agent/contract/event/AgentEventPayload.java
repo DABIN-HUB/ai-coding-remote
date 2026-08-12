@@ -17,11 +17,12 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = PermissionResolvedPayload.class, name = "permissionResolved"),
         @JsonSubTypes.Type(value = TaskCompletedPayload.class, name = "taskCompleted"),
         @JsonSubTypes.Type(value = SessionInterruptedPayload.class, name = "sessionInterrupted"),
+        @JsonSubTypes.Type(value = SessionControlTimeoutPayload.class, name = "sessionControlTimeout"),
         @JsonSubTypes.Type(value = AgentErrorPayload.class, name = "agentError"),
         @JsonSubTypes.Type(value = WarningPayload.class, name = "warning")
 })
 public sealed interface AgentEventPayload permits SessionPayload, AgentMessagePayload, PlanUpdatedPayload,
         ToolEventPayload, CommandOutputPayload, FileChangedPayload, DiffUpdatedPayload, ChangeSetFinalizedPayload,
         PermissionRequiredPayload, PermissionResolvedPayload, TaskCompletedPayload, SessionInterruptedPayload,
-        AgentErrorPayload, WarningPayload {
+        SessionControlTimeoutPayload, AgentErrorPayload, WarningPayload {
 }

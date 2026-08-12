@@ -117,7 +117,9 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
             return;
         }
         if (event.type() == AgentEventType.SESSION_IDLE) {
-            session.setSessionStatus(AgentSessionDbStatus.IDLE.name());
+            if (!AgentSessionDbStatus.CLOSED.name().equals(session.getSessionStatus())) {
+                session.setSessionStatus(AgentSessionDbStatus.IDLE.name());
+            }
             completeCommand(platformCommandId);
             return;
         }
@@ -125,7 +127,14 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
                 && event.payload() instanceof SessionInterruptedPayload payload) {
             session.setSessionStatus(AgentSessionDbStatus.IDLE.name());
             interruptTargetCommand(platformCommandId, payload);
-            completeCommand(payload.controlCommandId());
+            if (payload.action() != SessionControlAction.CLOSE_SESSION) {
+                completeCommand(payload.controlCommandId());
+            }
+            return;
+        }
+        if (event.type() == AgentEventType.SESSION_CONTROL_TIMEOUT
+                && event.payload() instanceof SessionControlTimeoutPayload payload) {
+            timeoutCommand(payload.controlCommandId(), payload.reason());
             return;
         }
         if (event.type() == AgentEventType.SESSION_COMPLETED) {
@@ -249,6 +258,15 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
         commandMapper.updateById(command);
     }
 
+    private void timeoutCommand(String commandId, String message) {
+        AgentCommandDO command = command(commandId);
+        if (command == null) {
+            return;
+        }
+        transitionCommand(command, AgentCommandDbStatus.TIMEOUT, message);
+        commandMapper.updateById(command);
+    }
+
     private void interruptTargetCommand(String platformCommandId, SessionInterruptedPayload payload) {
         String targetCommandId = payload.targetCommandId() == null || payload.targetCommandId().isBlank()
                 ? platformCommandId : payload.targetCommandId();
@@ -299,7 +317,8 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
                     && current != AgentCommandDbStatus.REJECTED && current != AgentCommandDbStatus.TIMEOUT;
             case REJECTED -> current == AgentCommandDbStatus.CREATED || current == AgentCommandDbStatus.ROUTING
                     || current == AgentCommandDbStatus.ACKED;
-            case TIMEOUT -> current == AgentCommandDbStatus.CREATED || current == AgentCommandDbStatus.ROUTING;
+            case TIMEOUT -> current == AgentCommandDbStatus.CREATED || current == AgentCommandDbStatus.ROUTING
+                    || current == AgentCommandDbStatus.ACKED || current == AgentCommandDbStatus.RUNNING;
             case CREATED, ROUTING, DELIVERED -> false;
         };
     }

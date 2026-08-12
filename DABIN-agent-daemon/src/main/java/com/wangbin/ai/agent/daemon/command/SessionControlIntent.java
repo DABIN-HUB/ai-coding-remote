@@ -10,6 +10,13 @@ public record SessionControlIntent(
         SessionControlAction action,
         String controlCommandId,
         String reason,
-        Instant createdAt
+        Instant createdAt,
+        Instant deadlineAt,
+        Instant timedOutAt
 ) {
+
+    public SessionControlIntent markTimedOut(Instant now) {
+        return new SessionControlIntent(sessionId, targetCommandId, action, controlCommandId, reason, createdAt,
+                deadlineAt, now);
+    }
 }

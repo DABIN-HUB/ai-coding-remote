@@ -71,6 +71,28 @@ const remainingRouter: AppRouteRecordRaw[] = [
     ]
   },
   {
+    path: '/agent',
+    component: Layout,
+    redirect: '/agent/coding',
+    name: 'Agent',
+    meta: {
+      title: 'AI Coding',
+      icon: 'ep:cpu'
+    },
+    children: [
+      {
+        path: 'coding',
+        component: () => import('@/views/agent/coding/index.vue'),
+        name: 'AgentCoding',
+        meta: {
+          title: 'AI Coding',
+          icon: 'ep:chat-dot-round',
+          noCache: false
+        }
+      }
+    ]
+  },
+  {
     path: '/user',
     component: Layout,
     name: 'UserInfo',

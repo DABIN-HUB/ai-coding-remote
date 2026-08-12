@@ -176,6 +176,20 @@ public class FileServiceImplTest extends BaseDbUnitTest {
     }
 
     @Test
+    public void testDeleteFileIfExists_successAndMissingIsIdempotent() throws Exception {
+        FileDO dbFile = randomPojo(FileDO.class, o -> o.setConfigId(10L).setPath("tudou.jpg"));
+        fileMapper.insert(dbFile);
+        FileClient client = mock(FileClient.class);
+        when(fileConfigService.getFileClient(eq(10L))).thenReturn(client);
+
+        fileService.deleteFileIfExists(dbFile.getId());
+        fileService.deleteFileIfExists(dbFile.getId());
+
+        assertNull(fileMapper.selectById(dbFile.getId()));
+        verify(client).delete(eq("tudou.jpg"));
+    }
+
+    @Test
     public void testDeleteFile_pathInvalid() {
         // mock 数据
         FileDO dbFile = randomPojo(FileDO.class, o -> o.setConfigId(10L).setPath("../tudou.jpg"));

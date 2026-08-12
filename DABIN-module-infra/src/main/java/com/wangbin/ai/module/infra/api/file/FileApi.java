@@ -90,6 +90,13 @@ public interface FileApi {
     void deleteFile(Long id) throws Exception;
 
     /**
+     * 幂等删除已有统一文件记录和底层对象。文件记录不存在时视为删除已经完成。
+     *
+     * @param id 文件记录编号
+     */
+    void deleteFileIfExists(Long id) throws Exception;
+
+    /**
      * 生成文件预签名地址，用于读取
      *
      * @param url 完整的文件访问地址

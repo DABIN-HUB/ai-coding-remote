@@ -12,6 +12,7 @@ import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
+import com.wangbin.ai.agent.contract.event.SessionControlTimeoutPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.session.*;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
@@ -32,11 +33,16 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -394,6 +400,45 @@ class DefaultAgentCommandHandlerTest {
     }
 
     @Test
+    void controlTerminalTimeoutEmitsReliableEventKeepsPromptActiveAndAllowsNewControl() throws Exception {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        try {
+            RecordingAdapter adapter = new RecordingAdapter();
+            adapter.sessionControlTimeoutLatch = new CountDownLatch(1);
+            RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+            SessionControlIntentRegistry controlRegistry = new SessionControlIntentRegistry(128,
+                    Duration.ofMillis(1), Duration.ofSeconds(5));
+            DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                    new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager(), null,
+                    controlRegistry, scheduler);
+
+            handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+            handler.handle(cancelCommand("cmd-cancel-1", TEST_COMMAND_ID), credential(), outboundSender);
+
+            assertThat(adapter.sessionControlTimeoutLatch.await(2, TimeUnit.SECONDS)).isTrue();
+            AgentEvent timeout = outboundSender.events.stream()
+                    .filter(event -> event.type() == AgentEventType.SESSION_CONTROL_TIMEOUT)
+                    .findFirst()
+                    .orElseThrow();
+            SessionControlTimeoutPayload payload = (SessionControlTimeoutPayload) timeout.payload();
+            assertThat(timeout.priority()).isEqualTo(EventPriority.CRITICAL);
+            assertThat(payload.controlCommandId()).isEqualTo("cmd-cancel-1");
+            assertThat(payload.targetCommandId()).isEqualTo(TEST_COMMAND_ID);
+            assertThat(payload.action()).isEqualTo(SessionControlAction.CANCEL);
+            assertThat(adapter.interruptCalls).hasValue(1);
+
+            handler.handle(cancelCommand("cmd-cancel-2", TEST_COMMAND_ID), credential(), outboundSender);
+            handler.handle(promptCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+
+            assertThat(adapter.interruptCalls).hasValue(2);
+            assertThat(outboundSender.acks.getLast().status()).isEqualTo(CommandAckStatus.REJECTED);
+            assertThat(outboundSender.acks.getLast().code()).isEqualTo("SESSION_BUSY");
+        } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     void wrongTargetControlCommandIsRejectedWithoutNativeInterrupt() {
         RecordingAdapter adapter = new RecordingAdapter();
         RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
@@ -429,6 +474,28 @@ class DefaultAgentCommandHandlerTest {
                 .orElseThrow()
                 .payload();
         assertThat(payload.action()).isEqualTo(SessionControlAction.CLOSE_SESSION);
+    }
+
+    @Test
+    void closeIdleSessionAcksBeforeNativeSessionCompleted() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        adapter.emit(sessionEvent(AgentEventType.SESSION_IDLE, TEST_COMMAND_ID));
+        handler.handle(closeCommand("cmd-close-1", null), credential(), outboundSender);
+
+        assertThat(adapter.closeSessionCalls).hasValue(1);
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.ACCEPTED);
+        AgentEvent completed = outboundSender.events.stream()
+                .filter(event -> event.type() == AgentEventType.SESSION_COMPLETED)
+                .findFirst()
+                .orElseThrow();
+        assertThat(completed.extensions()).containsEntry(AgentEventExtensionKeys.PLATFORM_COMMAND_ID,
+                "cmd-close-1");
     }
 
     private AgentCommand promptCommand(String commandId) {
@@ -618,10 +685,12 @@ class DefaultAgentCommandHandlerTest {
         private final AtomicInteger interruptCalls = new AtomicInteger();
         private final AtomicInteger cancelPendingPermissionCalls = new AtomicInteger();
         private final AtomicInteger closeSessionCalls = new AtomicInteger();
+        private final AtomicInteger sessionControlTimeoutCalls = new AtomicInteger();
         private final Sinks.Many<AgentEvent> eventSink = Sinks.many().multicast().directBestEffort();
         private boolean failSendPrompt;
         private boolean failResolvePermission;
         private String closeSessionControlCommandId;
+        private CountDownLatch sessionControlTimeoutLatch;
 
         @Override
         public AgentType agentType() {
@@ -682,6 +751,26 @@ class DefaultAgentCommandHandlerTest {
         public void closeSession(String sessionId, String controlCommandId) {
             closeSessionCalls.incrementAndGet();
             closeSessionControlCommandId = controlCommandId;
+            emit(new AgentEvent("event-session-completed-" + controlCommandId, "trace-1", TEST_TENANT_ID,
+                    TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID, sessionId, 1L, AgentType.CODEX,
+                    AgentEventType.SESSION_COMPLETED, EventPriority.CRITICAL, Instant.now(),
+                    new SessionPayload("native-1", AgentSessionStatus.COMPLETED, null, Map.of()),
+                    Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, controlCommandId)));
+        }
+
+        @Override
+        public void emitSessionControlTimeout(String sessionId, String targetCommandId, String controlCommandId,
+                                              SessionControlAction action, String reason) {
+            sessionControlTimeoutCalls.incrementAndGet();
+            emit(new AgentEvent("event-control-timeout-" + controlCommandId, "trace-1", TEST_TENANT_ID,
+                    TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID, sessionId, 1L, AgentType.CODEX,
+                    AgentEventType.SESSION_CONTROL_TIMEOUT, EventPriority.CRITICAL, Instant.now(),
+                    new SessionControlTimeoutPayload(targetCommandId, controlCommandId, action, Instant.now(),
+                            reason, Map.of()),
+                    Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, targetCommandId)));
+            if (sessionControlTimeoutLatch != null) {
+                sessionControlTimeoutLatch.countDown();
+            }
         }
 
         private void emit(AgentEvent event) {
