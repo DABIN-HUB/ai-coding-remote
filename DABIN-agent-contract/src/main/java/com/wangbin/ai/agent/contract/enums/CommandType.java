@@ -8,6 +8,7 @@ public enum CommandType {
 
     APPROVE_PERMISSION,
     REJECT_PERMISSION,
+    FETCH_ARTIFACT,
 
     START_SESSION,
     CLOSE_SESSION,

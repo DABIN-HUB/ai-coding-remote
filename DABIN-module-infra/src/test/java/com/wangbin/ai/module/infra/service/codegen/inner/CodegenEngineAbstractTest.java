@@ -28,15 +28,10 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * {@link CodegenEngine} 的单元测试抽象基类
- *
- * @author 芋道源码
+ * Shared unit-test base for code generation snapshot tests.
  */
 public abstract class CodegenEngineAbstractTest extends BaseMockitoUnitTest {
 
-    /**
-     * 测试文件资源目录
-     */
     private String resourcesPath = "";
 
     @InjectMocks
@@ -52,9 +47,8 @@ public abstract class CodegenEngineAbstractTest extends BaseMockitoUnitTest {
 
     @BeforeEach
     public void setUp() {
-        codegenEngine.setJakartaEnable(true); // 强制使用 jakarta，保证单测可以基于 jakarta 断言
+        codegenEngine.setJakartaEnable(true);
         codegenEngine.initGlobalBindingMap();
-        // 获取测试文件 resources 路径，writeResult 调试用
         String absolutePath = FileUtil.getAbsolutePath("application-unit-test.yaml");
         resourcesPath = absolutePath.split("/target")[0] + "/src/test/resources/codegen/";
     }
@@ -87,9 +81,6 @@ public abstract class CodegenEngineAbstractTest extends BaseMockitoUnitTest {
         return list;
     }
 
-    /**
-     * 重新生成断言数据的开关，命令行加 {@code -Dcodegen.regenerate=true} 启用
-     */
     private static final boolean REGENERATE = Boolean.parseBoolean(System.getProperty("codegen.regenerate", "false"));
 
     @SuppressWarnings("rawtypes")
@@ -101,22 +92,29 @@ public abstract class CodegenEngineAbstractTest extends BaseMockitoUnitTest {
         String assertContent = ResourceUtil.readUtf8Str("codegen/" + path + "/assert.json");
         List<HashMap> asserts = JsonUtils.parseArray(assertContent, HashMap.class);
         Set<String> expectedFiles = asserts.stream()
-                .map(m -> (String) m.get("filePath"))
+                .map(m -> normalizeFilePath((String) m.get("filePath")))
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        assertEquals(expectedFiles, result.keySet(), "生成文件集合不匹配");
-        // 校验每个文件；归一化 \r\n 为 \n，让断言不依赖文件落盘的换行风格
+        Map<String, String> normalizedResult = new HashMap<>();
+        result.forEach((filePath, content) -> normalizedResult.put(normalizeFilePath(filePath), content));
+        assertEquals(expectedFiles, normalizedResult.keySet(), "generated file set mismatch");
         asserts.forEach(assertMap -> {
             String contentPath = (String) assertMap.get("contentPath");
-            String filePath = (String) assertMap.get("filePath");
+            String filePath = normalizeFilePath((String) assertMap.get("filePath"));
             String expected = normalizeLineEndings(ResourceUtil.readUtf8Str("codegen/" + path + "/" + contentPath));
-            String actual = result.get(filePath);
-            assertEquals(expected, normalizeLineEndings(actual), filePath + "：不匹配");
+            String actual = normalizedResult.get(filePath);
+            assertEquals(expected, normalizeLineEndings(actual), filePath + " mismatch");
         });
     }
 
-    /**
-     * 统一换行符并忽略文件末尾换行，避免 Windows/Unix 落盘差异导致快照断言失败
-     */
+    private static String normalizeFilePath(String filePath) {
+        if (filePath == null) {
+            return null;
+        }
+        return filePath.replace('\\', '/')
+                .replace("src/main/java/com.wangbin.ai/", "src/main/java/com/wangbin/ai/")
+                .replace("src/test/java/com.wangbin.ai/", "src/test/java/com/wangbin/ai/");
+    }
+
     private static String normalizeLineEndings(String content) {
         if (content == null) {
             return null;
@@ -125,32 +123,15 @@ public abstract class CodegenEngineAbstractTest extends BaseMockitoUnitTest {
         return content.replaceAll("\\n+\\z", "");
     }
 
-    // ==================== 调试专用 ====================
-
-    /**
-     * 【调试使用】将生成的代码，写入到文件
-     *
-     * @param result 生成的代码
-     * @param path   写入文件的路径
-     */
     protected void writeFile(Map<String, String> result, String path) {
-        // 生成压缩包
         String[] paths = result.keySet().toArray(new String[0]);
         ByteArrayInputStream[] ins = result.values().stream().map(IoUtil::toUtf8Stream).toArray(ByteArrayInputStream[]::new);
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         ZipUtil.zip(outputStream, paths, ins);
-        // 写入文件
         FileUtil.writeBytes(outputStream.toByteArray(), path);
     }
 
-    /**
-     * 【调试使用】将生成的结果，写入到文件
-     *
-     * @param result   生成的代码
-     * @param basePath 写入文件的路径（绝对路径）
-     */
     protected void writeResult(Map<String, String> result, String basePath) {
-        // 写入文件内容
         List<Map<String, String>> asserts = new ArrayList<>();
         Set<String> usedContentPaths = new LinkedHashSet<>();
         result.forEach((filePath, fileContent) -> {
@@ -159,10 +140,8 @@ public abstract class CodegenEngineAbstractTest extends BaseMockitoUnitTest {
             String name = StrUtil.subBefore(lastFilePath, '.', true);
             String parentPath = StrUtil.subBefore(filePath, '/' + lastFilePath, true);
             String parentDir = StrUtil.subAfter(parentPath, '/', true);
-            // index.vue 按页面语义稳定归档，避免结果迭代顺序导致列表页和表单页的快照路径互换
             String contentPath = "index".equals(name) && ("form".equals(parentDir) || "detail".equals(parentDir))
                     ? ext + '/' + parentDir + '/' + name : ext + '/' + name;
-            // ERP 多个子表的 form/index.vue 仍可能撞名，继续补充祖父目录区分
             if (usedContentPaths.contains(contentPath)) {
                 String grandParentDir = StrUtil.subAfter(StrUtil.subBefore(parentPath, '/' + parentDir, true), '/', true);
                 contentPath = ext + '/' + grandParentDir + '/' + parentDir + '/' + name;
@@ -175,8 +154,6 @@ public abstract class CodegenEngineAbstractTest extends BaseMockitoUnitTest {
                     .put("contentPath", contentPath).build());
             FileUtil.writeUtf8String(fileContent, basePath + "/" + contentPath);
         });
-        // 写入 assert.json 文件
         FileUtil.writeUtf8String(JsonUtils.toJsonPrettyString(asserts), basePath + "/assert.json");
     }
-
 }

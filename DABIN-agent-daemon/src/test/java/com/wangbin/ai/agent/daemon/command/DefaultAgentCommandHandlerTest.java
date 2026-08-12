@@ -13,8 +13,13 @@ import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.session.*;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
+import com.wangbin.ai.agent.daemon.artifact.ArtifactPrepareUploadResponse;
+import com.wangbin.ai.agent.daemon.artifact.ArtifactTransferManager;
+import com.wangbin.ai.agent.daemon.cloud.controlplane.ControlPlaneClient;
 import com.wangbin.ai.agent.daemon.cloud.relay.DaemonOutboundSender;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
+import com.wangbin.ai.agent.daemon.event.change.SensitivePathPolicy;
+import com.wangbin.ai.agent.daemon.event.change.WorkspaceRelativePathNormalizer;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.project.LocalProject;
 import com.wangbin.ai.agent.daemon.project.LocalProjectRegistry;
@@ -47,6 +52,9 @@ class DefaultAgentCommandHandlerTest {
     private static final String TEST_COMMAND_ID = "cmd-1";
     private static final String TEST_COMMAND_ID_SECOND = "cmd-2";
     private static final String TEST_PERMISSION_ID = "perm-1";
+    private static final String TEST_ARTIFACT_ID = "art-1";
+    private static final String TEST_FILE_CHANGE_ID = "fchg-1";
+    private static final String TEST_CHANGE_SET_ID = "chg-1";
     private static final String TEST_PROMPT = "inspect project";
 
     @Test
@@ -268,6 +276,77 @@ class DefaultAgentCommandHandlerTest {
                 .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.FAILED);
     }
 
+    @Test
+    void fetchArtifactIsAcceptedAfterQueueAndDoesNotUseCodingAdapter() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        RecordingArtifactTransferManager artifactTransferManager = new RecordingArtifactTransferManager();
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager(),
+                artifactTransferManager);
+
+        handler.handle(fetchArtifactCommand(TEST_COMMAND_ID), credential(), outboundSender);
+
+        assertThat(adapter.startSessionCalls).hasValue(0);
+        assertThat(adapter.sendPromptCalls).hasValue(0);
+        assertThat(artifactTransferManager.canResolveCalls).hasValue(1);
+        assertThat(artifactTransferManager.submitCalls).hasValue(1);
+        assertThat(artifactTransferManager.pending.startCalls).hasValue(1);
+        assertThat(outboundSender.acks).extracting(CommandAck::status).containsExactly(CommandAckStatus.ACCEPTED);
+    }
+
+    @Test
+    void fetchArtifactActivePromptIsRejectedAsBusyBeforeSubmittingTransfer() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        RecordingArtifactTransferManager artifactTransferManager = new RecordingArtifactTransferManager();
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager(),
+                artifactTransferManager);
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(fetchArtifactCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+
+        assertThat(artifactTransferManager.submitCalls).hasValue(0);
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.REJECTED);
+        assertThat(outboundSender.acks.get(1).code()).isEqualTo("SESSION_BUSY");
+    }
+
+    @Test
+    void fetchArtifactQueueRejectReturnsRejectedAndReleasesDedup() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        CountingDedupCache dedupCache = new CountingDedupCache();
+        RecordingArtifactTransferManager artifactTransferManager = new RecordingArtifactTransferManager();
+        artifactTransferManager.rejectSubmit = true;
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(), dedupCache,
+                workspaceManager(), artifactTransferManager);
+
+        handler.handle(fetchArtifactCommand(TEST_COMMAND_ID), credential(), outboundSender);
+
+        assertThat(dedupCache.releaseCalls).hasValue(1);
+        assertThat(outboundSender.acks).extracting(CommandAck::status).containsExactly(CommandAckStatus.REJECTED);
+        assertThat(outboundSender.acks.getFirst().code()).isEqualTo("ARTIFACT_TRANSFER_BUSY");
+    }
+
+    @Test
+    void fetchArtifactAckFailureCancelsQueuedTransferAndDoesNotStartUpload() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter, false);
+        CountingDedupCache dedupCache = new CountingDedupCache();
+        RecordingArtifactTransferManager artifactTransferManager = new RecordingArtifactTransferManager();
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(), dedupCache,
+                workspaceManager(), artifactTransferManager);
+
+        handler.handle(fetchArtifactCommand(TEST_COMMAND_ID), credential(), outboundSender);
+
+        assertThat(dedupCache.releaseCalls).hasValue(1);
+        assertThat(artifactTransferManager.pending.cancelCalls).hasValue(1);
+        assertThat(artifactTransferManager.pending.startCalls).hasValue(0);
+        assertThat(outboundSender.acks).extracting(CommandAck::status).containsExactly(CommandAckStatus.ACCEPTED);
+    }
+
     private AgentCommand promptCommand(String commandId) {
         return promptCommand(commandId, TEST_SESSION_ID, TEST_DEVICE_ID);
     }
@@ -287,6 +366,15 @@ class DefaultAgentCommandHandlerTest {
         return new AgentCommand(commandId, commandId, TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
                 TEST_PROJECT_ID, TEST_SESSION_ID, AgentType.CODEX, commandType,
                 new PermissionDecisionCommandPayload(TEST_PERMISSION_ID, decision, "reason", Map.of()),
+                Instant.now(), Instant.now().plusSeconds(30), Map.of());
+    }
+
+    private AgentCommand fetchArtifactCommand(String commandId) {
+        return new AgentCommand(commandId, commandId, TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, AgentType.CODEX, CommandType.FETCH_ARTIFACT,
+                new ArtifactFetchCommandPayload(TEST_ARTIFACT_ID, TEST_FILE_CHANGE_ID, TEST_CHANGE_SET_ID,
+                        "src/App.java", com.wangbin.ai.agent.contract.enums.ArtifactSourceType.CHANGE_SET_FILE,
+                        Map.of()),
                 Instant.now(), Instant.now().plusSeconds(30), Map.of());
     }
 
@@ -493,6 +581,73 @@ class DefaultAgentCommandHandlerTest {
         @Override
         public void release(String commandId) {
             releaseCalls.incrementAndGet();
+        }
+    }
+
+    private static final class RecordingArtifactTransferManager extends ArtifactTransferManager {
+
+        private final AtomicInteger canResolveCalls = new AtomicInteger();
+        private final AtomicInteger submitCalls = new AtomicInteger();
+        private RecordingPendingTransfer pending;
+        private boolean rejectSubmit;
+
+        private RecordingArtifactTransferManager() {
+            super(null, null, null, null, new NoopControlPlaneClient(), new AgentDaemonProperties(),
+                    java.util.concurrent.Executors.newSingleThreadExecutor());
+        }
+
+        @Override
+        public boolean canResolve(AgentCommand command, ArtifactFetchCommandPayload payload) {
+            canResolveCalls.incrementAndGet();
+            return true;
+        }
+
+        @Override
+        public PendingArtifactTransfer submit(AgentCommand command, ArtifactFetchCommandPayload payload,
+                                              DeviceCredentialState credential) {
+            submitCalls.incrementAndGet();
+            if (rejectSubmit) {
+                return null;
+            }
+            pending = new RecordingPendingTransfer();
+            return pending;
+        }
+    }
+
+    private static final class RecordingPendingTransfer implements ArtifactTransferManager.PendingArtifactTransfer {
+
+        private final AtomicInteger startCalls = new AtomicInteger();
+        private final AtomicInteger cancelCalls = new AtomicInteger();
+
+        @Override
+        public void start() {
+            startCalls.incrementAndGet();
+        }
+
+        @Override
+        public void cancel() {
+            cancelCalls.incrementAndGet();
+        }
+    }
+
+    private static final class NoopControlPlaneClient implements ControlPlaneClient {
+
+        @Override
+        public com.wangbin.ai.agent.daemon.cloud.controlplane.PairDeviceResponse pair(String controlPlaneUrl,
+                                                                                      com.wangbin.ai.agent.daemon.cloud.controlplane.PairDeviceRequest request) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public com.wangbin.ai.agent.daemon.cloud.controlplane.RelayTicketResponse createDeviceRelayTicket(
+                DeviceCredentialState credential) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ArtifactPrepareUploadResponse prepareArtifactUpload(DeviceCredentialState credential,
+                                                                   com.wangbin.ai.agent.daemon.artifact.ArtifactPrepareUploadRequest request) {
+            return new ArtifactPrepareUploadResponse(true, null, null);
         }
     }
 }

@@ -22,6 +22,8 @@ import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignReques
 
 import java.net.URI;
 import java.net.URL;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.time.Duration;
 
 /**
@@ -88,6 +90,18 @@ public class S3FileClient extends AbstractFileClient<S3FileClientConfig> {
     }
 
     @Override
+    public String upload(InputStream inputStream, long contentLength, String path, String type) {
+        PutObjectRequest putRequest = PutObjectRequest.builder()
+                .bucket(config.getBucket())
+                .key(path)
+                .contentType(type)
+                .contentLength(contentLength)
+                .build();
+        client.putObject(putRequest, RequestBody.fromInputStream(inputStream, contentLength));
+        return presignGetUrl(path, null);
+    }
+
+    @Override
     public void delete(String path) {
         DeleteObjectRequest deleteRequest = DeleteObjectRequest.builder()
                 .bucket(config.getBucket())
@@ -103,6 +117,15 @@ public class S3FileClient extends AbstractFileClient<S3FileClientConfig> {
                 .key(path)
                 .build();
         return IoUtil.readBytes(client.getObject(getRequest));
+    }
+
+    @Override
+    public void writeContent(String path, OutputStream outputStream) {
+        GetObjectRequest getRequest = GetObjectRequest.builder()
+                .bucket(config.getBucket())
+                .key(path)
+                .build();
+        IoUtil.copy(client.getObject(getRequest), outputStream);
     }
 
     @Override

@@ -5,8 +5,10 @@ import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FileCreateReqVO
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePageReqVO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePresignedUrlRespVO;
 import com.wangbin.ai.module.infra.dal.dataobject.file.FileDO;
+import com.wangbin.ai.module.infra.api.file.dto.FileUploadReqDTO;
 import jakarta.validation.constraints.NotEmpty;
 
+import java.io.OutputStream;
 import java.util.List;
 
 /**
@@ -35,6 +37,14 @@ public interface FileService {
      */
     String createFile(@NotEmpty(message = "文件内容不能为空") byte[] content,
                       String name, String directory, String type);
+
+    /**
+     * 流式保存文件，并返回文件记录。
+     *
+     * @param reqDTO 上传请求
+     * @return 文件记录
+     */
+    FileDO createFile(FileUploadReqDTO reqDTO);
 
     /**
      * 生成文件预签名地址信息，用于上传
@@ -85,6 +95,15 @@ public interface FileService {
      * @return 文件内容
      */
     byte[] getFileContent(Long configId, String path) throws Exception;
+
+    /**
+     * 将文件内容写入输出流，避免大文件下载路径整体进入内存。
+     *
+     * @param configId 配置编号
+     * @param path     文件路径
+     * @param outputStream 输出流
+     */
+    void writeFileContent(Long configId, String path, OutputStream outputStream) throws Exception;
 
     /**
      * 获得文件

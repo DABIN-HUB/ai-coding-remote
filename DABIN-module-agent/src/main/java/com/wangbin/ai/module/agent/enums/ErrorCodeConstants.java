@@ -49,4 +49,20 @@ public interface ErrorCodeConstants {
     ErrorCode FILE_CHANGE_ACCESS_DENIED = new ErrorCode(1_020_000_043, "FileChange access denied");
     ErrorCode CHANGE_SET_COMMAND_MISMATCH = new ErrorCode(1_020_000_044, "ChangeSet command mismatch");
     ErrorCode CHANGE_SET_INVALID_PAYLOAD = new ErrorCode(1_020_000_045, "ChangeSet payload is invalid");
+    ErrorCode ARTIFACT_NOT_EXISTS = new ErrorCode(1_020_000_046, "Artifact does not exist");
+    ErrorCode ARTIFACT_ACCESS_DENIED = new ErrorCode(1_020_000_047, "Artifact access denied");
+    ErrorCode ARTIFACT_SOURCE_NOT_EXISTS = new ErrorCode(1_020_000_048, "Artifact source does not exist");
+    ErrorCode ARTIFACT_SOURCE_DELETED = new ErrorCode(1_020_000_049, "Deleted file cannot be transferred as artifact");
+    ErrorCode ARTIFACT_SOURCE_REDACTED = new ErrorCode(1_020_000_050, "Redacted file cannot be transferred as artifact");
+    ErrorCode ARTIFACT_SOURCE_INVALID = new ErrorCode(1_020_000_051, "Artifact source is invalid");
+    ErrorCode ARTIFACT_SESSION_NOT_IDLE = new ErrorCode(1_020_000_052, "Session must be IDLE before requesting artifact");
+    ErrorCode ARTIFACT_DEVICE_OFFLINE = new ErrorCode(1_020_000_053, "Artifact device is offline");
+    ErrorCode ARTIFACT_DISPATCH_FAILED = new ErrorCode(1_020_000_054, "Artifact fetch dispatch failed");
+    ErrorCode ARTIFACT_UPLOAD_TICKET_INVALID = new ErrorCode(1_020_000_055, "Artifact upload ticket is invalid");
+    ErrorCode ARTIFACT_SIZE_EXCEEDED = new ErrorCode(1_020_000_056, "Artifact file size exceeds limit");
+    ErrorCode ARTIFACT_SIZE_MISMATCH = new ErrorCode(1_020_000_057, "Artifact upload size mismatch");
+    ErrorCode ARTIFACT_SHA256_MISMATCH = new ErrorCode(1_020_000_058, "Artifact upload SHA-256 mismatch");
+    ErrorCode ARTIFACT_FILE_STORE_FAILED = new ErrorCode(1_020_000_059, "Artifact file store failed");
+    ErrorCode ARTIFACT_NOT_READY = new ErrorCode(1_020_000_060, "Artifact is not ready");
+    ErrorCode ARTIFACT_EXPIRED = new ErrorCode(1_020_000_061, "Artifact has expired");
 }

@@ -11,6 +11,8 @@ import com.wangbin.ai.module.infra.framework.file.core.client.AbstractFileClient
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * Ftp 文件客户端
@@ -60,6 +62,19 @@ public class FtpFileClient extends AbstractFileClient<FtpFileClientConfig> {
     }
 
     @Override
+    public String upload(InputStream inputStream, long contentLength, String path, String type) {
+        String filePath = getFilePath(path);
+        String fileName = FileUtil.getName(filePath);
+        String dir = StrUtil.removeSuffix(filePath, fileName);
+        reconnectIfTimeout();
+        boolean success = ftp.upload(dir, fileName, inputStream);
+        if (!success) {
+            throw new FtpException(StrUtil.format("上传文件到目标目录 ({}) 失败", filePath));
+        }
+        return super.formatFileUrl(config.getDomain(), path);
+    }
+
+    @Override
     public void delete(String path) {
         String filePath = getFilePath(path);
         reconnectIfTimeout();
@@ -75,6 +90,15 @@ public class FtpFileClient extends AbstractFileClient<FtpFileClientConfig> {
         reconnectIfTimeout();
         ftp.download(dir, fileName, out);
         return out.toByteArray();
+    }
+
+    @Override
+    public void writeContent(String path, OutputStream outputStream) {
+        String filePath = getFilePath(path);
+        String fileName = FileUtil.getName(filePath);
+        String dir = StrUtil.removeSuffix(filePath, fileName);
+        reconnectIfTimeout();
+        ftp.download(dir, fileName, outputStream);
     }
 
     private String getFilePath(String path) {

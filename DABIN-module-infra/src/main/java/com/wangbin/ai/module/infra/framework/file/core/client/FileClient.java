@@ -1,5 +1,10 @@
 package com.wangbin.ai.module.infra.framework.file.core.client;
 
+import cn.hutool.core.io.IoUtil;
+
+import java.io.InputStream;
+import java.io.OutputStream;
+
 /**
  * 文件客户端
  *
@@ -25,6 +30,19 @@ public interface FileClient {
     String upload(byte[] content, String path, String type) throws Exception;
 
     /**
+     * 流式上传文件。默认实现保持旧 Provider 兼容；支持流式的 Provider 应覆盖该方法。
+     *
+     * @param inputStream 文件流
+     * @param contentLength 文件大小
+     * @param path 相对路径
+     * @param type MIME 类型
+     * @return 完整路径，即 HTTP 访问地址
+     */
+    default String upload(InputStream inputStream, long contentLength, String path, String type) throws Exception {
+        return upload(IoUtil.readBytes(inputStream), path, type);
+    }
+
+    /**
      * 删除文件
      *
      * @param path 相对路径
@@ -39,6 +57,19 @@ public interface FileClient {
      * @return 文件的内容
      */
     byte[] getContent(String path) throws Exception;
+
+    /**
+     * 将文件内容写入输出流。默认实现保持旧 Provider 兼容；支持流式的 Provider 应覆盖该方法。
+     *
+     * @param path 相对路径
+     * @param outputStream 输出流
+     */
+    default void writeContent(String path, OutputStream outputStream) throws Exception {
+        byte[] content = getContent(path);
+        if (content != null) {
+            IoUtil.write(outputStream, false, content);
+        }
+    }
 
     // ========== 文件签名，目前仅 S3 支持 ==========
 

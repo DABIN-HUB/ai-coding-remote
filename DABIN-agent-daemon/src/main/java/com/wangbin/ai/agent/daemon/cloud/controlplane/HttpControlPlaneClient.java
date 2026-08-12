@@ -3,6 +3,9 @@ package com.wangbin.ai.agent.daemon.cloud.controlplane;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.protocol.AgentHttpHeaders;
+import com.wangbin.ai.agent.daemon.artifact.ArtifactPrepareUploadRequest;
+import com.wangbin.ai.agent.daemon.artifact.ArtifactPrepareUploadResponse;
+import com.wangbin.ai.agent.daemon.artifact.ArtifactReportFailureRequest;
 import com.wangbin.ai.agent.daemon.exception.AgentConnectionException;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
@@ -12,6 +15,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 @Component
 public class HttpControlPlaneClient implements ControlPlaneClient {
@@ -20,8 +25,12 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
     private static final String CREATE_RELAY_TICKET_PATH = "/agent/device/createRelayTicket";
     private static final String REGISTER_PROJECT_PATH = "/agent/project/register";
     private static final String REPORT_RUNTIME_PATH = "/agent/runtime/report";
+    private static final String PREPARE_ARTIFACT_UPLOAD_PATH = "/agent/artifact/prepareUpload";
+    private static final String UPLOAD_ARTIFACT_PATH = "/agent/artifact/upload";
+    private static final String REPORT_ARTIFACT_FAILURE_PATH = "/agent/artifact/reportFailure";
     private static final String HEADER_CONTENT_TYPE = "Content-Type";
     private static final String CONTENT_TYPE_JSON = "application/json";
+    private static final String CONTENT_TYPE_OCTET_STREAM = "application/octet-stream";
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -60,6 +69,41 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
     @Override
     public void reportRuntime(DeviceCredentialState credential, RuntimeReportRequest request) {
         postWithCredential(credential, REPORT_RUNTIME_PATH, request, Object.class);
+    }
+
+    @Override
+    public ArtifactPrepareUploadResponse prepareArtifactUpload(DeviceCredentialState credential,
+                                                               ArtifactPrepareUploadRequest request) {
+        return postWithCredential(credential, PREPARE_ARTIFACT_UPLOAD_PATH, request,
+                ArtifactPrepareUploadResponse.class);
+    }
+
+    @Override
+    public void uploadArtifact(DeviceCredentialState credential, String artifactId, String uploadTicket,
+                               Path file, String contentType, long contentLength) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(credential.getControlPlaneUrl() + UPLOAD_ARTIFACT_PATH))
+                    .header(HEADER_CONTENT_TYPE, contentType == null || contentType.isBlank()
+                            ? CONTENT_TYPE_OCTET_STREAM : contentType)
+                    .header(AgentHttpHeaders.ARTIFACT_UPLOAD_TICKET, uploadTicket)
+                    .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
+                        try {
+                            return Files.newInputStream(file);
+                        } catch (Exception ex) {
+                            throw new AgentConnectionException("failed to open artifact file stream", ex);
+                        }
+                    }))
+                    .build();
+            send(request, Object.class);
+        } catch (Exception ex) {
+            throw new AgentConnectionException("failed to upload artifact", ex);
+        }
+    }
+
+    @Override
+    public void reportArtifactFailure(DeviceCredentialState credential, ArtifactReportFailureRequest request) {
+        postWithCredential(credential, REPORT_ARTIFACT_FAILURE_PATH, request, Object.class);
     }
 
     private <T> T post(String url, Object body, Class<T> responseType) {

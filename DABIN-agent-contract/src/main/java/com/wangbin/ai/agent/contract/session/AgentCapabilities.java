@@ -6,6 +6,7 @@ public record AgentCapabilities(
         boolean permission,
         boolean terminal,
         boolean fileDiff,
+        boolean artifact,
         boolean plan,
         boolean imageInput,
         boolean cancel,
@@ -13,11 +14,11 @@ public record AgentCapabilities(
 ) {
 
     public static AgentCapabilities codexDefault() {
-        return new AgentCapabilities(true, false, true, false, true, false, false, false, false);
+        return new AgentCapabilities(true, false, true, false, true, true, false, false, false, false);
     }
 
     public static AgentCapabilities unknown() {
-        return new AgentCapabilities(false, false, false, false, false, false, false, false, false);
+        return new AgentCapabilities(false, false, false, false, false, false, false, false, false, false);
     }
 
 }

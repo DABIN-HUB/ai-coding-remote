@@ -2,9 +2,14 @@ package com.wangbin.ai.module.infra.framework.file.core.client.local;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.IORuntimeException;
+import cn.hutool.core.io.IoUtil;
 import com.wangbin.ai.module.infra.framework.file.core.client.AbstractFileClient;
 import com.wangbin.ai.module.infra.framework.file.core.utils.FilePathUtils;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -36,6 +41,16 @@ public class LocalFileClient extends AbstractFileClient<LocalFileClientConfig> {
     }
 
     @Override
+    public String upload(InputStream inputStream, long contentLength, String path, String type) throws IOException {
+        Path filePath = Path.of(getFilePath(path));
+        Files.createDirectories(filePath.getParent());
+        try (InputStream in = inputStream) {
+            Files.copy(in, filePath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+        return super.formatFileUrl(config.getDomain(), path);
+    }
+
+    @Override
     public void delete(String path) {
         String filePath = getFilePath(path);
         FileUtil.del(filePath);
@@ -51,6 +66,17 @@ public class LocalFileClient extends AbstractFileClient<LocalFileClientConfig> {
                 return null;
             }
             throw ex;
+        }
+    }
+
+    @Override
+    public void writeContent(String path, OutputStream outputStream) throws IOException {
+        Path filePath = Path.of(getFilePath(path));
+        if (!Files.exists(filePath)) {
+            return;
+        }
+        try (InputStream inputStream = Files.newInputStream(filePath)) {
+            IoUtil.copy(inputStream, outputStream);
         }
     }
 

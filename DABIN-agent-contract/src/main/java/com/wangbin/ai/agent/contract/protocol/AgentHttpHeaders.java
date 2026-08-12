@@ -12,6 +12,7 @@ public final class AgentHttpHeaders {
     public static final String TENANT_ID = "tenant-id";
     public static final String CREDENTIAL_ID = "X-Agent-Credential-Id";
     public static final String CREDENTIAL_SECRET = "X-Agent-Credential-Secret";
+    public static final String ARTIFACT_UPLOAD_TICKET = "X-Agent-Artifact-Upload-Ticket";
 
     private AgentHttpHeaders() {
     }

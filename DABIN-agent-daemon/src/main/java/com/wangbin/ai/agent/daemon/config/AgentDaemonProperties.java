@@ -36,6 +36,7 @@ public class AgentDaemonProperties {
 
     private final Smoke smoke = new Smoke();
     private final Cloud cloud = new Cloud();
+    private final Artifact artifact = new Artifact();
     @Valid
     private final List<Project> projects = new ArrayList<>();
 
@@ -101,6 +102,10 @@ public class AgentDaemonProperties {
 
     public Cloud getCloud() {
         return cloud;
+    }
+
+    public Artifact getArtifact() {
+        return artifact;
     }
 
     public List<Project> getProjects() {
@@ -176,6 +181,42 @@ public class AgentDaemonProperties {
 
         public void setWelcomeTimeout(Duration welcomeTimeout) {
             this.welcomeTimeout = welcomeTimeout;
+        }
+    }
+
+    public static class Artifact {
+
+        @Min(1)
+        private long maxFileSize = 100L * 1024L * 1024L;
+
+        @Min(1)
+        private int transferThreads = 2;
+
+        @Min(1)
+        private int transferQueueCapacity = 16;
+
+        public long getMaxFileSize() {
+            return maxFileSize;
+        }
+
+        public void setMaxFileSize(long maxFileSize) {
+            this.maxFileSize = maxFileSize;
+        }
+
+        public int getTransferThreads() {
+            return transferThreads;
+        }
+
+        public void setTransferThreads(int transferThreads) {
+            this.transferThreads = transferThreads;
+        }
+
+        public int getTransferQueueCapacity() {
+            return transferQueueCapacity;
+        }
+
+        public void setTransferQueueCapacity(int transferQueueCapacity) {
+            this.transferQueueCapacity = transferQueueCapacity;
         }
     }
 

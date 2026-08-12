@@ -16,6 +16,7 @@ public class AgentIdFactory {
     private static final String PERMISSION_PREFIX = "perm_";
     private static final String CHANGE_SET_PREFIX = "chg_";
     private static final String FILE_CHANGE_PREFIX = "fchg_";
+    private static final String ARTIFACT_PREFIX = "art_";
     private static final int RANDOM_BYTE_LENGTH = 18;
 
     private final SecureRandom secureRandom = new SecureRandom();
@@ -50,6 +51,10 @@ public class AgentIdFactory {
 
     public String fileChangeId() {
         return FILE_CHANGE_PREFIX + randomToken();
+    }
+
+    public String artifactId() {
+        return ARTIFACT_PREFIX + randomToken();
     }
 
     private String randomToken() {

@@ -5,9 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.wangbin.ai.agent.contract.command.AgentCommand;
+import com.wangbin.ai.agent.contract.command.ArtifactFetchCommandPayload;
 import com.wangbin.ai.agent.contract.command.PromptCommandPayload;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.enums.ArtifactSourceType;
 import com.wangbin.ai.agent.contract.enums.ChangeSetStatus;
 import com.wangbin.ai.agent.contract.enums.CommandType;
 import com.wangbin.ai.agent.contract.enums.FileChangeType;
@@ -52,6 +54,26 @@ class WsEnvelopePolymorphicRoundTripTest {
         assertThat(decoded.payload().commandId()).isEqualTo(TEST_COMMAND_ID);
         assertThat(decoded.payload().payload()).isInstanceOf(PromptCommandPayload.class);
         assertThat(((PromptCommandPayload) decoded.payload().payload()).prompt()).isEqualTo("hello");
+    }
+
+    @Test
+    void agentCommandArtifactFetchPayloadRoundTripsInsideWsEnvelope() throws Exception {
+        AgentCommand command = new AgentCommand(TEST_COMMAND_ID, "trace-1", TEST_TENANT_ID, TEST_USER_ID,
+                TEST_DEVICE_ID, TEST_PROJECT_ID, TEST_SESSION_ID, AgentType.CODEX, CommandType.FETCH_ARTIFACT,
+                new ArtifactFetchCommandPayload("art-1", "fchg-1", "chg-1", "src/App.java",
+                        ArtifactSourceType.CHANGE_SET_FILE, Map.of()),
+                Instant.now(), null, Map.of());
+
+        WsEnvelope<AgentCommand> decoded = decode(WsEnvelope.of(WsMessageType.AGENT_COMMAND, command),
+                AgentCommand.class);
+
+        assertThat(decoded.type()).isEqualTo(WsMessageType.AGENT_COMMAND);
+        assertThat(decoded.payload().commandType()).isEqualTo(CommandType.FETCH_ARTIFACT);
+        assertThat(decoded.payload().payload()).isInstanceOf(ArtifactFetchCommandPayload.class);
+        ArtifactFetchCommandPayload payload = (ArtifactFetchCommandPayload) decoded.payload().payload();
+        assertThat(payload.artifactId()).isEqualTo("art-1");
+        assertThat(payload.relativePath()).isEqualTo("src/App.java");
+        assertThat(payload.sourceType()).isEqualTo(ArtifactSourceType.CHANGE_SET_FILE);
     }
 
     @Test

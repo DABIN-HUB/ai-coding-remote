@@ -12,6 +12,10 @@ agent:
     outbound-queue-capacity: 1024
     reliable-outbound-capacity: 512
     projects: []
+    artifact:
+      max-file-size: 104857600
+      transfer-threads: 2
+      transfer-queue-capacity: 16
     cloud:
       control-plane-url: http://127.0.0.1:48080
       relay-url: ws://127.0.0.1:48180/agent/ws

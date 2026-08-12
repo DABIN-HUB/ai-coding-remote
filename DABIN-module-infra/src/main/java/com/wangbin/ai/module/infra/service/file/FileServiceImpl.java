@@ -9,6 +9,7 @@ import cn.hutool.crypto.digest.DigestUtil;
 import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.framework.common.util.http.HttpUtils;
 import com.wangbin.ai.framework.common.util.object.BeanUtils;
+import com.wangbin.ai.module.infra.api.file.dto.FileUploadReqDTO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FileCreateReqVO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePageReqVO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePresignedUrlRespVO;
@@ -22,6 +23,8 @@ import jakarta.annotation.Resource;
 import lombok.SneakyThrows;
 import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.List;
 
 import static cn.hutool.core.date.DatePattern.PURE_DATE_PATTERN;
@@ -102,6 +105,33 @@ public class FileServiceImpl implements FileService {
                 .setName(name).setPath(path).setUrl(url)
                 .setType(type).setSize((long) content.length));
         return url;
+    }
+
+    @Override
+    @SneakyThrows
+    public FileDO createFile(FileUploadReqDTO reqDTO) {
+        String name = FilePathUtils.validateFileName(reqDTO.getName());
+        String type = StrUtil.isEmpty(reqDTO.getType()) ? FileTypeUtils.getMineType(name) : reqDTO.getType();
+        if (StrUtil.isEmpty(FileUtil.extName(name))) {
+            String extension = FileTypeUtils.getExtension(type);
+            if (StrUtil.isNotEmpty(extension)) {
+                name = name + extension;
+            }
+        }
+        String path = generateUploadPath(name, reqDTO.getDirectory());
+        FileClient client = reqDTO.getConfigId() == null
+                ? fileConfigService.getMasterFileClient()
+                : fileConfigService.getFileClient(reqDTO.getConfigId());
+        Assert.notNull(client, "客户端({}) 不能为空", reqDTO.getConfigId() == null ? "master" : reqDTO.getConfigId());
+        String url;
+        try (InputStream inputStream = reqDTO.getInputStream()) {
+            url = client.upload(inputStream, reqDTO.getSize(), path, type);
+        }
+        FileDO file = new FileDO().setConfigId(client.getId())
+                .setName(name).setPath(path).setUrl(url)
+                .setType(type).setSize(reqDTO.getSize());
+        fileMapper.insert(file);
+        return file;
     }
 
     @VisibleForTesting
@@ -236,6 +266,14 @@ public class FileServiceImpl implements FileService {
         Assert.notNull(client, "客户端({}) 不能为空", configId);
         // 2.2 获取文件内容
         return client.getContent(path);
+    }
+
+    @Override
+    public void writeFileContent(Long configId, String path, OutputStream outputStream) throws Exception {
+        FilePathUtils.validatePath(path);
+        FileClient client = fileConfigService.getFileClient(configId);
+        Assert.notNull(client, "客户端({}) 不能为空", configId);
+        client.writeContent(path, outputStream);
     }
 
     @Override

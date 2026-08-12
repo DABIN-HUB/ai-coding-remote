@@ -20,6 +20,9 @@ public final class AgentCoordinationKeys {
     private static final String PAIRING_LOCK_PREFIX = "agent:lock:pair:";
     private static final String COMMAND_IDEMPOTENCY_LOCK_PREFIX = "agent:lock:command:";
     private static final String PERMISSION_DECISION_LOCK_PREFIX = "agent:lock:permission:";
+    private static final String ARTIFACT_REQUEST_LOCK_PREFIX = "agent:lock:artifact:request:";
+    private static final String ARTIFACT_UPLOAD_LOCK_PREFIX = "agent:lock:artifact:upload:";
+    private static final String ARTIFACT_UPLOAD_TICKET_PREFIX = "agent:artifact:upload:";
     private static final String RELAY_COMMAND_CHANNEL_PREFIX = "agent:relay:command:";
     private static final String EVENT_INGRESS_STREAM = "agent:event:ingress";
     private static final String SHA_256_ALGORITHM = "SHA-256";
@@ -66,6 +69,19 @@ public final class AgentCoordinationKeys {
 
     public static String permissionDecisionLock(Long tenantId, String permissionId) {
         return PERMISSION_DECISION_LOCK_PREFIX + tenantId + ":" + sha256UrlSafe(permissionId);
+    }
+
+    public static String artifactRequestLock(Long tenantId, Long userId, String fileChangeId, String clientRequestId) {
+        return ARTIFACT_REQUEST_LOCK_PREFIX + tenantId + ":" + userId + ":" + sha256UrlSafe(fileChangeId)
+                + ":" + sha256UrlSafe(clientRequestId);
+    }
+
+    public static String artifactUploadLock(Long tenantId, String artifactId) {
+        return ARTIFACT_UPLOAD_LOCK_PREFIX + tenantId + ":" + sha256UrlSafe(artifactId);
+    }
+
+    public static String artifactUploadTicket(String rawTicket) {
+        return ARTIFACT_UPLOAD_TICKET_PREFIX + sha256UrlSafe(rawTicket);
     }
 
     public static String relayCommandChannel(String relayNodeId) {

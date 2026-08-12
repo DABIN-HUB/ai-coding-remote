@@ -15,6 +15,7 @@ class AgentCapabilitiesTest {
         assertThat(capabilities.permission()).isTrue();
         assertThat(capabilities.terminal()).isFalse();
         assertThat(capabilities.fileDiff()).isTrue();
+        assertThat(capabilities.artifact()).isTrue();
         assertThat(capabilities.plan()).isFalse();
         assertThat(capabilities.imageInput()).isFalse();
         assertThat(capabilities.cancel()).isFalse();

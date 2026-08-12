@@ -8,6 +8,8 @@ import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.session.PromptCommand;
 import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
+import com.wangbin.ai.agent.daemon.artifact.ArtifactTransferManager;
+import com.wangbin.ai.agent.daemon.artifact.ArtifactTransferManager.PendingArtifactTransfer;
 import com.wangbin.ai.agent.daemon.cloud.relay.DaemonOutboundSender;
 import com.wangbin.ai.agent.daemon.exception.AgentCapabilityException;
 import com.wangbin.ai.agent.daemon.event.AgentCommandLifecyclePolicy;
@@ -17,6 +19,7 @@ import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import com.wangbin.ai.agent.daemon.workspace.WorkspaceManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
@@ -35,6 +38,7 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     private static final String CODE_DUPLICATE = "DUPLICATE";
     private static final String CODE_REJECTED = "REJECTED";
     private static final String CODE_BUSY = "SESSION_BUSY";
+    private static final String CODE_ARTIFACT_BUSY = "ARTIFACT_TRANSFER_BUSY";
     private static final String CODE_FAILED = "COMMAND_START_FAILED";
     private static final String CODE_PERMISSION_FAILED = "PERMISSION_DECISION_FAILED";
 
@@ -42,15 +46,24 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     private final LocalProjectRegistry localProjectRegistry;
     private final CommandDedupCache dedupCache;
     private final WorkspaceManager workspaceManager;
+    private final ArtifactTransferManager artifactTransferManager;
     private final ConcurrentMap<String, CodingAgentAdapter> sessionAdapters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> activeSessionCommands = new ConcurrentHashMap<>();
 
+    @Autowired
     public DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
-                                      CommandDedupCache dedupCache, WorkspaceManager workspaceManager) {
+                                      CommandDedupCache dedupCache, WorkspaceManager workspaceManager,
+                                      ArtifactTransferManager artifactTransferManager) {
         this.adapters = adapters;
         this.localProjectRegistry = localProjectRegistry;
         this.dedupCache = dedupCache;
         this.workspaceManager = workspaceManager;
+        this.artifactTransferManager = artifactTransferManager;
+    }
+
+    DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
+                               CommandDedupCache dedupCache, WorkspaceManager workspaceManager) {
+        this(adapters, localProjectRegistry, dedupCache, workspaceManager, null);
     }
 
     @Override
@@ -64,6 +77,8 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
         } else if (command.commandType() == CommandType.APPROVE_PERMISSION
                 || command.commandType() == CommandType.REJECT_PERMISSION) {
             handlePermissionDecision(command, outboundSender);
+        } else if (command.commandType() == CommandType.FETCH_ARTIFACT) {
+            handleFetchArtifact(command, credential, outboundSender);
         } else {
             outboundSender.sendCommandAck(rejected(command, "unsupported command type"));
         }
@@ -178,6 +193,60 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
                     CommandAckStatus.FAILED, CODE_PERMISSION_FAILED, "permission decision failed", Instant.now(),
                     Map.of()));
         }
+    }
+
+    private void handleFetchArtifact(AgentCommand command, DeviceCredentialState credential,
+                                     DaemonOutboundSender outboundSender) {
+        if (artifactTransferManager == null) {
+            outboundSender.sendCommandAck(rejected(command, "artifact transfer is not configured"));
+            return;
+        }
+        if (!(command.payload() instanceof ArtifactFetchCommandPayload payload)) {
+            outboundSender.sendCommandAck(rejected(command, "invalid artifact fetch payload"));
+            return;
+        }
+        LocalProject project = localProjectRegistry.findByPlatformProjectId(command.projectId()).orElse(null);
+        if (project == null || project.agentType() != command.agentType()) {
+            outboundSender.sendCommandAck(rejected(command, "project is not registered locally"));
+            return;
+        }
+        try {
+            Path realWorkspace = workspaceManager.validateWorkspace(project.realWorkspace().toString());
+            if (!realWorkspace.equals(project.realWorkspace())) {
+                outboundSender.sendCommandAck(rejected(command, "workspace real path changed"));
+                return;
+            }
+            artifactTransferManager.canResolve(command, payload);
+        } catch (AgentCapabilityException ex) {
+            outboundSender.sendCommandAck(rejected(command, "artifact source is not allowed locally"));
+            return;
+        }
+        if (activeSessionCommands.containsKey(command.sessionId())) {
+            outboundSender.sendCommandAck(busy(command));
+            return;
+        }
+        if (dedupCache.reserve(command.commandId()) == CommandDedupResult.DUPLICATE) {
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.DUPLICATE, CODE_DUPLICATE, "duplicate command", Instant.now(), Map.of()));
+            return;
+        }
+        PendingArtifactTransfer transfer = artifactTransferManager.submit(command, payload, credential);
+        if (transfer == null) {
+            dedupCache.release(command.commandId());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.REJECTED, CODE_ARTIFACT_BUSY, "artifact transfer queue is full", Instant.now(),
+                    Map.of()));
+            return;
+        }
+        CommandAck accepted = new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "artifact fetch accepted", Instant.now(), Map.of());
+        if (!outboundSender.sendCommandAck(accepted)) {
+            transfer.cancel();
+            dedupCache.release(command.commandId());
+            return;
+        }
+        transfer.start();
+        dedupCache.markCompleted(command.commandId());
     }
 
     private void handleAgentEvent(DaemonOutboundSender outboundSender, AgentEvent event) {

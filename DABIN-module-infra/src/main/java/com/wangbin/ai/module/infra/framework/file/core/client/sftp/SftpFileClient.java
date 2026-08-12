@@ -11,6 +11,9 @@ import com.wangbin.ai.module.infra.framework.file.core.client.AbstractFileClient
 import com.jcraft.jsch.JSch;
 
 import java.io.File;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
 
 /**
  * Sftp 文件客户端
@@ -67,6 +70,24 @@ public class SftpFileClient extends AbstractFileClient<SftpFileClientConfig> {
     }
 
     @Override
+    public String upload(InputStream inputStream, long contentLength, String path, String type) throws Exception {
+        String filePath = getFilePath(path);
+        String dir = StrUtil.removeSuffix(filePath, FileUtil.getName(filePath));
+        File file = FileUtils.createTempFile();
+        try (InputStream in = inputStream; OutputStream out = Files.newOutputStream(file.toPath())) {
+            in.transferTo(out);
+        }
+        reconnectIfTimeout();
+        sftp.mkDirs(dir);
+        boolean success = sftp.upload(filePath, file);
+        FileUtil.del(file);
+        if (!success) {
+            throw new JschRuntimeException(StrUtil.format("上传文件到目标目录 ({}) 失败", filePath));
+        }
+        return super.formatFileUrl(config.getDomain(), path);
+    }
+
+    @Override
     public void delete(String path) {
         String filePath = getFilePath(path);
         reconnectIfTimeout();
@@ -80,6 +101,19 @@ public class SftpFileClient extends AbstractFileClient<SftpFileClientConfig> {
         reconnectIfTimeout();
         sftp.download(filePath, destFile);
         return FileUtil.readBytes(destFile);
+    }
+
+    @Override
+    public void writeContent(String path, OutputStream outputStream) throws Exception {
+        String filePath = getFilePath(path);
+        File destFile = FileUtils.createTempFile();
+        reconnectIfTimeout();
+        sftp.download(filePath, destFile);
+        try (InputStream inputStream = Files.newInputStream(destFile.toPath())) {
+            inputStream.transferTo(outputStream);
+        } finally {
+            FileUtil.del(destFile);
+        }
     }
 
     private String getFilePath(String path) {
