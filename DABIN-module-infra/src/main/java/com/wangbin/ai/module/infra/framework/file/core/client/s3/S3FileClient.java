@@ -102,6 +102,11 @@ public class S3FileClient extends AbstractFileClient<S3FileClientConfig> {
     }
 
     @Override
+    public boolean supportsStreamingUpload() {
+        return true;
+    }
+
+    @Override
     public void delete(String path) {
         DeleteObjectRequest deleteRequest = DeleteObjectRequest.builder()
                 .bucket(config.getBucket())
@@ -126,6 +131,11 @@ public class S3FileClient extends AbstractFileClient<S3FileClientConfig> {
                 .key(path)
                 .build();
         IoUtil.copy(client.getObject(getRequest), outputStream);
+    }
+
+    @Override
+    public boolean supportsStreamingDownload() {
+        return true;
     }
 
     @Override

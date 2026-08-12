@@ -41,6 +41,7 @@ import com.wangbin.ai.module.agent.service.command.RelayCommandGateway;
 import com.wangbin.ai.module.agent.service.device.DeviceCredentialAuthService;
 import com.wangbin.ai.module.agent.service.device.DeviceCredentialIdentity;
 import com.wangbin.ai.module.infra.api.file.FileApi;
+import com.wangbin.ai.module.infra.api.file.dto.FileClientCapabilityRespDTO;
 import com.wangbin.ai.module.infra.api.file.dto.FileRespDTO;
 import com.wangbin.ai.module.infra.api.file.dto.FileUploadReqDTO;
 import org.junit.jupiter.api.AfterEach;
@@ -51,10 +52,12 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
+import com.wangbin.ai.framework.tenant.core.job.TenantJob;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -143,7 +146,10 @@ class AgentArtifactServiceImplTest {
         artifactProperties.setFileConfigId(TEST_FILE_CONFIG_ID);
         artifactProperties.setUploadTicketTtl(Duration.ofMinutes(5));
         artifactProperties.setRetention(Duration.ofDays(7));
+        artifactProperties.setNonStreamingMaxFileSize(8L);
+        artifactProperties.setCleanupInterval(Duration.ofSeconds(45));
         when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(lock.tryLock()).thenReturn(true);
         when(lock.tryLock(anyLong(), any(TimeUnit.class))).thenReturn(true);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -153,6 +159,7 @@ class AgentArtifactServiceImplTest {
         }).when(valueOperations).set(anyString(), anyString(), any(Duration.class));
         when(valueOperations.getAndDelete(anyString())).thenAnswer(invocation ->
                 redisValues.remove(invocation.getArgument(0)));
+        when(fileApi.getFileClientCapability(any())).thenReturn(fileCapability(true, true));
         service = new AgentArtifactServiceImpl(artifactMapper, fileChangeMapper, changeSetMapper, sessionMapper,
                 commandMapper, deviceMapper, projectMapper, routeLookupService, relayCommandGateway,
                 credentialAuthService, fileApi, redissonClient, stringRedisTemplate, controlPlaneProperties,
@@ -250,6 +257,24 @@ class AgentArtifactServiceImplTest {
     }
 
     @Test
+    void prepareUploadRejectsOversizeForNonStreamingProviderButAllowsSmallFile() {
+        stubCredential();
+        artifactStore.set(artifact(ArtifactStatus.ROUTING));
+        transferCommandStore.set(transferCommand(AgentCommandDbStatus.ACKED));
+        when(fileApi.getFileClientCapability(TEST_FILE_CONFIG_ID)).thenReturn(fileCapability(false, true));
+
+        assertThatThrownBy(() -> service.prepareUpload(TEST_TENANT_ID, "credential-id", "secret",
+                prepareReq(sha256(TEST_CONTENT)))).isInstanceOf(ServiceException.class);
+
+        byte[] smallContent = "small".getBytes(StandardCharsets.UTF_8);
+        AgentArtifactPrepareUploadReqVO smallReq = prepareReq(sha256(smallContent));
+        smallReq.setFileSize(smallContent.length);
+        var response = service.prepareUpload(TEST_TENANT_ID, "credential-id", "secret", smallReq);
+
+        assertThat(response.getAlreadyReady()).isFalse();
+    }
+
+    @Test
     void uploadStreamsIntoExistingFileApiAndMarksReady() throws Exception {
         stubCredential();
         artifactStore.set(artifact(ArtifactStatus.ROUTING));
@@ -325,6 +350,21 @@ class AgentArtifactServiceImplTest {
     }
 
     @Test
+    void downloadRejectsOversizeForNonStreamingProvider() {
+        AgentArtifactDO artifact = artifact(ArtifactStatus.READY);
+        artifact.setFileId(TEST_FILE_ID);
+        artifact.setFileSize((long) TEST_CONTENT.length);
+        artifact.setExpireTime(LocalDateTime.now().plusDays(1));
+        artifactStore.set(artifact);
+        FileRespDTO file = fileResp();
+        when(fileApi.getFile(TEST_FILE_ID)).thenReturn(file);
+        when(fileApi.getFileClientCapability(TEST_FILE_CONFIG_ID)).thenReturn(fileCapability(true, false));
+
+        assertThatThrownBy(() -> service.download(TEST_ARTIFACT_ID, TEST_USER_ID, OutputStream.nullOutputStream()))
+                .isInstanceOf(ServiceException.class);
+    }
+
+    @Test
     void cleanupExpiresOnlyAfterExistingFileDeleteSucceeds() throws Exception {
         AgentArtifactDO artifact = artifact(ArtifactStatus.READY);
         artifact.setFileId(TEST_FILE_ID);
@@ -340,6 +380,30 @@ class AgentArtifactServiceImplTest {
         doThrow(new IllegalStateException("delete failed")).when(fileApi).deleteFile(TEST_FILE_ID + 1);
         assertThat(service.cleanupExpired()).isZero();
         assertThat(failedDelete.getArtifactStatus()).isEqualTo(ArtifactStatus.READY.name());
+    }
+
+    @Test
+    void cleanupUsesTenantScopedArtifactLockAndSkipsWhenLockedByAnotherNode() throws Exception {
+        AgentArtifactDO artifact = artifact(ArtifactStatus.READY);
+        artifact.setFileId(TEST_FILE_ID);
+        when(artifactMapper.selectExpiredReady(any(LocalDateTime.class), eq(50))).thenReturn(List.of(artifact));
+        when(lock.tryLock()).thenReturn(false);
+
+        assertThat(service.cleanupExpired()).isZero();
+
+        verify(fileApi, never()).deleteFile(TEST_FILE_ID);
+        verify(redissonClient).getLock(AgentCoordinationKeys.artifactCleanupLock(TEST_TENANT_ID, TEST_ARTIFACT_ID));
+    }
+
+    @Test
+    void cleanupJobUsesTenantJobAndPropertiesInterval() throws Exception {
+        AgentArtifactCleanupJob job = new AgentArtifactCleanupJob(service, artifactProperties);
+
+        assertThat(job.cleanupIntervalMillis()).isEqualTo(Duration.ofSeconds(45).toMillis());
+        assertThat(AgentArtifactCleanupJob.class.getMethod("cleanupExpired").isAnnotationPresent(TenantJob.class))
+                .isTrue();
+        assertThat(AgentArtifactCleanupJob.class.getMethod("cleanupExpired").isAnnotationPresent(Scheduled.class))
+                .isTrue();
     }
 
     @Test
@@ -420,6 +484,14 @@ class AgentArtifactServiceImplTest {
             reqDTO.getInputStream().transferTo(OutputStream.nullOutputStream());
             return fileResp();
         });
+    }
+
+    private FileClientCapabilityRespDTO fileCapability(boolean streamingUpload, boolean streamingDownload) {
+        FileClientCapabilityRespDTO capability = new FileClientCapabilityRespDTO();
+        capability.setConfigId(TEST_FILE_CONFIG_ID);
+        capability.setStreamingUpload(streamingUpload);
+        capability.setStreamingDownload(streamingDownload);
+        return capability;
     }
 
     private AgentArtifactRequestFileReqVO request(String clientRequestId) {

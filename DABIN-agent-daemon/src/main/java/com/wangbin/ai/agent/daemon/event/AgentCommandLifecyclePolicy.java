@@ -17,6 +17,7 @@ public final class AgentCommandLifecyclePolicy {
             return !payload.retryable();
         }
         return event.type() == AgentEventType.SESSION_IDLE
+                || event.type() == AgentEventType.SESSION_INTERRUPTED
                 || event.type() == AgentEventType.SESSION_COMPLETED;
     }
 }

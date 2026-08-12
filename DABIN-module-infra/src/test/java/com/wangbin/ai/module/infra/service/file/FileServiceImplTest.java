@@ -5,6 +5,7 @@ import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.framework.common.util.object.ObjectUtils;
 import com.wangbin.ai.framework.test.core.ut.BaseDbUnitTest;
 import com.wangbin.ai.framework.test.core.util.AssertUtils;
+import com.wangbin.ai.module.infra.api.file.dto.FileClientCapabilityRespDTO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FileCreateReqVO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePageReqVO;
 import com.wangbin.ai.module.infra.dal.dataobject.file.FileDO;
@@ -209,6 +210,33 @@ public class FileServiceImplTest extends BaseDbUnitTest {
 
         // 调用，并断言异常
         assertServiceException(() -> fileService.getFileContent(configId, path), FILE_PATH_INVALID);
+    }
+
+    @Test
+    public void testGetFileClientCapability_masterAndSpecifiedConfig() {
+        FileClient masterClient = mock(FileClient.class);
+        when(masterClient.getId()).thenReturn(10L);
+        when(masterClient.supportsStreamingUpload()).thenReturn(true);
+        when(masterClient.supportsStreamingDownload()).thenReturn(false);
+        when(fileConfigService.getMasterFileClient()).thenReturn(masterClient);
+
+        FileClientCapabilityRespDTO masterCapability = fileService.getFileClientCapability(null);
+
+        assertEquals(10L, masterCapability.getConfigId());
+        assertTrue(masterCapability.getStreamingUpload());
+        assertFalse(masterCapability.getStreamingDownload());
+
+        FileClient specifiedClient = mock(FileClient.class);
+        when(specifiedClient.getId()).thenReturn(20L);
+        when(specifiedClient.supportsStreamingUpload()).thenReturn(false);
+        when(specifiedClient.supportsStreamingDownload()).thenReturn(true);
+        when(fileConfigService.getFileClient(20L)).thenReturn(specifiedClient);
+
+        FileClientCapabilityRespDTO specifiedCapability = fileService.getFileClientCapability(20L);
+
+        assertEquals(20L, specifiedCapability.getConfigId());
+        assertFalse(specifiedCapability.getStreamingUpload());
+        assertTrue(specifiedCapability.getStreamingDownload());
     }
 
     @Test

@@ -19,6 +19,12 @@ public class AgentArtifactProperties {
     @Positive
     private long maxFileSize = 100L * 1024L * 1024L;
 
+    /**
+     * Max artifact size for providers whose FileClient falls back to byte[] upload/download.
+     */
+    @Positive
+    private long nonStreamingMaxFileSize = 5L * 1024L * 1024L;
+
     @NotNull
     private Duration uploadTicketTtl = Duration.ofMinutes(5);
 
@@ -27,6 +33,9 @@ public class AgentArtifactProperties {
 
     @Positive
     private int cleanupBatchSize = 50;
+
+    @NotNull
+    private Duration cleanupInterval = Duration.ofMinutes(1);
 
     public Long getFileConfigId() {
         return fileConfigId;
@@ -42,6 +51,14 @@ public class AgentArtifactProperties {
 
     public void setMaxFileSize(long maxFileSize) {
         this.maxFileSize = maxFileSize;
+    }
+
+    public long getNonStreamingMaxFileSize() {
+        return nonStreamingMaxFileSize;
+    }
+
+    public void setNonStreamingMaxFileSize(long nonStreamingMaxFileSize) {
+        this.nonStreamingMaxFileSize = nonStreamingMaxFileSize;
     }
 
     public Duration getUploadTicketTtl() {
@@ -66,5 +83,13 @@ public class AgentArtifactProperties {
 
     public void setCleanupBatchSize(int cleanupBatchSize) {
         this.cleanupBatchSize = cleanupBatchSize;
+    }
+
+    public Duration getCleanupInterval() {
+        return cleanupInterval;
+    }
+
+    public void setCleanupInterval(Duration cleanupInterval) {
+        this.cleanupInterval = cleanupInterval;
     }
 }

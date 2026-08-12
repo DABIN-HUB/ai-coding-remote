@@ -11,12 +11,14 @@ import com.wangbin.ai.agent.contract.enums.ChangeSetStatus;
 import com.wangbin.ai.agent.contract.enums.EventPriority;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
 import com.wangbin.ai.agent.contract.enums.PermissionType;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
 import com.wangbin.ai.agent.contract.event.ChangeSetFinalizedPayload;
 import com.wangbin.ai.agent.contract.event.ChangedFileSummary;
 import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
+import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.event.PermissionRequiredPayload;
 import com.wangbin.ai.agent.contract.permission.CommandExecutionPermissionDetail;
@@ -62,6 +64,7 @@ class AgentEventIngressServiceImplTest {
     private static final String TEST_NATIVE_ITEM_ID = "item-1";
     private static final String TEST_COMMAND_ID = "cmd-1";
     private static final String TEST_PERMISSION_ID = "perm-1";
+    private static final String TEST_CONTROL_COMMAND_ID = "cmd-cancel-1";
     private static final String TEST_ERROR_MESSAGE_ID = "msg-error-1";
     private static final String TEST_RELAY_NODE_ID = "relay-1";
     private static final String TEST_CONNECTION_ID = "conn-1";
@@ -313,6 +316,60 @@ class AgentEventIngressServiceImplTest {
         assertThat(session.getLastEventSeq()).isEqualTo(1L);
     }
 
+    @Test
+    void sessionInterruptedCancelCompletesControlCommandAndDoesNotLetLateIdleSucceedPrompt() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO promptCommand = command(AgentCommandDbStatus.RUNNING);
+        AgentCommandDO controlCommand = command(TEST_CONTROL_COMMAND_ID, 201L, AgentCommandDbStatus.ACKED);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(promptCommand);
+        when(commandMapper.selectByCommandId(TEST_CONTROL_COMMAND_ID)).thenReturn(controlCommand);
+
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_INTERRUPTED, 1,
+                new SessionInterruptedPayload("native-1", TEST_COMMAND_ID, TEST_CONTROL_COMMAND_ID,
+                        SessionControlAction.CANCEL, null, "cancel", Map.of()), TEST_COMMAND_ID)));
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_IDLE, 2,
+                new SessionPayload("native-1", AgentSessionStatus.IDLE, null, Map.of()), TEST_COMMAND_ID)));
+
+        assertThat(promptCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.CANCELLED.name());
+        assertThat(controlCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.SUCCEEDED.name());
+        assertThat(session.getSessionStatus()).isEqualTo(AgentSessionDbStatus.IDLE.name());
+        assertThat(session.getLastEventSeq()).isEqualTo(2L);
+    }
+
+    @Test
+    void sessionInterruptedInterruptMarksPromptInterrupted() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO promptCommand = command(AgentCommandDbStatus.RUNNING);
+        AgentCommandDO controlCommand = command("cmd-interrupt-1", 202L, AgentCommandDbStatus.ACKED);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(promptCommand);
+        when(commandMapper.selectByCommandId("cmd-interrupt-1")).thenReturn(controlCommand);
+
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_INTERRUPTED, 1,
+                new SessionInterruptedPayload("native-1", TEST_COMMAND_ID, "cmd-interrupt-1",
+                        SessionControlAction.INTERRUPT, null, "pause", Map.of()), TEST_COMMAND_ID)));
+
+        assertThat(promptCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.INTERRUPTED.name());
+        assertThat(controlCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.SUCCEEDED.name());
+        assertThat(session.getSessionStatus()).isEqualTo(AgentSessionDbStatus.IDLE.name());
+    }
+
+    @Test
+    void sessionCompletedClosesSessionAndCompletesCloseCommand() {
+        AgentSessionDO session = session(0L);
+        AgentCommandDO closeCommand = command("cmd-close-1", 203L, AgentCommandDbStatus.ACKED);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(commandMapper.selectByCommandId("cmd-close-1")).thenReturn(closeCommand);
+
+        service.handleAgentEvent(payload(event(AgentEventType.SESSION_COMPLETED, 1,
+                new SessionPayload("native-1", AgentSessionStatus.COMPLETED, null, Map.of()), "cmd-close-1")));
+
+        assertThat(closeCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.SUCCEEDED.name());
+        assertThat(session.getSessionStatus()).isEqualTo(AgentSessionDbStatus.CLOSED.name());
+        assertThat(session.getClosedTime()).isNotNull();
+    }
+
     private AgentSessionDO session(Long lastEventSeq) {
         AgentSessionDO session = new AgentSessionDO();
         session.setId(TEST_SESSION_DB_ID);
@@ -337,10 +394,14 @@ class AgentEventIngressServiceImplTest {
     }
 
     private AgentCommandDO command(AgentCommandDbStatus status) {
+        return command(TEST_COMMAND_ID, TEST_COMMAND_DB_ID, status);
+    }
+
+    private AgentCommandDO command(String commandId, Long commandDbId, AgentCommandDbStatus status) {
         AgentCommandDO command = new AgentCommandDO();
-        command.setId(TEST_COMMAND_DB_ID);
+        command.setId(commandDbId);
         command.setTenantId(TEST_TENANT_ID);
-        command.setCommandId(TEST_COMMAND_ID);
+        command.setCommandId(commandId);
         command.setSessionId(TEST_SESSION_DB_ID);
         command.setDeviceId(TEST_DEVICE_DB_ID);
         command.setProjectId(TEST_PROJECT_DB_ID);

@@ -2,6 +2,7 @@ package com.wangbin.ai.module.infra.api.file;
 
 import com.wangbin.ai.module.infra.service.file.FileService;
 import com.wangbin.ai.framework.common.util.object.BeanUtils;
+import com.wangbin.ai.module.infra.api.file.dto.FileClientCapabilityRespDTO;
 import com.wangbin.ai.module.infra.api.file.dto.FileRespDTO;
 import com.wangbin.ai.module.infra.api.file.dto.FileUploadReqDTO;
 import jakarta.annotation.Resource;
@@ -40,6 +41,11 @@ public class FileApiImpl implements FileApi {
     @Override
     public void writeFileContent(Long configId, String path, OutputStream outputStream) throws Exception {
         fileService.writeFileContent(configId, path, outputStream);
+    }
+
+    @Override
+    public FileClientCapabilityRespDTO getFileClientCapability(Long configId) {
+        return fileService.getFileClientCapability(configId);
     }
 
     @Override

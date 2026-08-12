@@ -6,6 +6,7 @@ import com.wangbin.ai.agent.contract.coordination.AgentEventIngressPayload;
 import com.wangbin.ai.agent.contract.coordination.CommandAckIngressPayload;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
 import com.wangbin.ai.agent.contract.event.*;
 import com.wangbin.ai.module.agent.dal.dataobject.command.AgentCommandDO;
 import com.wangbin.ai.module.agent.dal.dataobject.device.AgentDeviceDO;
@@ -120,9 +121,17 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
             completeCommand(platformCommandId);
             return;
         }
+        if (event.type() == AgentEventType.SESSION_INTERRUPTED
+                && event.payload() instanceof SessionInterruptedPayload payload) {
+            session.setSessionStatus(AgentSessionDbStatus.IDLE.name());
+            interruptTargetCommand(platformCommandId, payload);
+            completeCommand(payload.controlCommandId());
+            return;
+        }
         if (event.type() == AgentEventType.SESSION_COMPLETED) {
             session.setSessionStatus(AgentSessionDbStatus.CLOSED.name());
             session.setClosedTime(LocalDateTime.now());
+            completeCommand(platformCommandId);
             return;
         }
         if (event.type() == AgentEventType.PERMISSION_REQUIRED
@@ -240,6 +249,20 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
         commandMapper.updateById(command);
     }
 
+    private void interruptTargetCommand(String platformCommandId, SessionInterruptedPayload payload) {
+        String targetCommandId = payload.targetCommandId() == null || payload.targetCommandId().isBlank()
+                ? platformCommandId : payload.targetCommandId();
+        AgentCommandDO command = command(targetCommandId);
+        if (command == null) {
+            return;
+        }
+        AgentCommandDbStatus target = payload.action() == SessionControlAction.CANCEL
+                || payload.action() == SessionControlAction.CLOSE_SESSION
+                ? AgentCommandDbStatus.CANCELLED : AgentCommandDbStatus.INTERRUPTED;
+        transitionCommand(command, target, payload.reason());
+        commandMapper.updateById(command);
+    }
+
     private AgentCommandDO command(String commandId) {
         if (commandId == null) {
             return null;
@@ -253,7 +276,8 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
             return;
         }
         command.setCommandStatus(target.name());
-        if (target == AgentCommandDbStatus.SUCCEEDED || target == AgentCommandDbStatus.FAILED
+        if (target == AgentCommandDbStatus.SUCCEEDED || target == AgentCommandDbStatus.CANCELLED
+                || target == AgentCommandDbStatus.INTERRUPTED || target == AgentCommandDbStatus.FAILED
                 || target == AgentCommandDbStatus.REJECTED || target == AgentCommandDbStatus.TIMEOUT) {
             command.setCompletedTime(LocalDateTime.now());
         }
@@ -268,7 +292,10 @@ public class AgentEventIngressServiceImpl implements AgentEventIngressService {
             case RUNNING -> current == AgentCommandDbStatus.CREATED || current == AgentCommandDbStatus.ROUTING
                     || current == AgentCommandDbStatus.ACKED;
             case SUCCEEDED -> current == AgentCommandDbStatus.RUNNING || current == AgentCommandDbStatus.ACKED;
-            case FAILED -> current != AgentCommandDbStatus.SUCCEEDED && current != AgentCommandDbStatus.FAILED
+            case CANCELLED, INTERRUPTED -> current == AgentCommandDbStatus.RUNNING
+                    || current == AgentCommandDbStatus.ACKED;
+            case FAILED -> current != AgentCommandDbStatus.SUCCEEDED && current != AgentCommandDbStatus.CANCELLED
+                    && current != AgentCommandDbStatus.INTERRUPTED && current != AgentCommandDbStatus.FAILED
                     && current != AgentCommandDbStatus.REJECTED && current != AgentCommandDbStatus.TIMEOUT;
             case REJECTED -> current == AgentCommandDbStatus.CREATED || current == AgentCommandDbStatus.ROUTING
                     || current == AgentCommandDbStatus.ACKED;

@@ -10,6 +10,7 @@ import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.CommandOutputPayload;
 import com.wangbin.ai.agent.contract.event.FileChangedPayload;
+import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.daemon.adapter.codex.protocol.CodexProtocolConstants;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
@@ -387,7 +388,7 @@ class CodexEventMapperTest {
     }
 
     @Test
-    void mapsInterruptedTurnToTerminalError() throws Exception {
+    void mapsInterruptedTurnToSessionInterrupted() throws Exception {
         var message = CodexRpcMessage.notification(CodexProtocolConstants.METHOD_TURN_COMPLETED,
                 objectMapper.readTree("""
                         {
@@ -403,10 +404,11 @@ class CodexEventMapperTest {
         var events = mapper.map(message, context);
 
         assertThat(events).hasSize(1);
-        assertThat(events.getFirst().type()).isEqualTo(AgentEventType.ERROR);
-        AgentErrorPayload payload = (AgentErrorPayload) events.getFirst().payload();
-        assertThat(payload.code()).isEqualTo("CODEX_TURN_INTERRUPTED");
-        assertThat(payload.retryable()).isFalse();
+        assertThat(events.getFirst().type()).isEqualTo(AgentEventType.SESSION_INTERRUPTED);
+        SessionInterruptedPayload payload = (SessionInterruptedPayload) events.getFirst().payload();
+        assertThat(payload.nativeSessionId()).isEqualTo("native-1");
+        assertThat(payload.targetCommandId()).isNull();
+        assertThat(payload.action().name()).isEqualTo("INTERRUPT");
     }
 
     @Test

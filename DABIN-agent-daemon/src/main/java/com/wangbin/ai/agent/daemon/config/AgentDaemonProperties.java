@@ -26,6 +26,9 @@ public class AgentDaemonProperties {
     @Min(1)
     private int commandDedupCapacity = 2048;
 
+    @Min(1)
+    private int sessionControlIntentCapacity = 128;
+
     private Duration commandDedupTtl = Duration.ofMinutes(45);
 
     @Min(1)
@@ -70,6 +73,14 @@ public class AgentDaemonProperties {
 
     public void setCommandDedupCapacity(int commandDedupCapacity) {
         this.commandDedupCapacity = commandDedupCapacity;
+    }
+
+    public int getSessionControlIntentCapacity() {
+        return sessionControlIntentCapacity;
+    }
+
+    public void setSessionControlIntentCapacity(int sessionControlIntentCapacity) {
+        this.sessionControlIntentCapacity = sessionControlIntentCapacity;
     }
 
     public Duration getCommandDedupTtl() {

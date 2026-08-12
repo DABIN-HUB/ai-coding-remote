@@ -1,15 +1,20 @@
 package com.wangbin.ai.module.agent.service.session;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wangbin.ai.agent.contract.command.CancelCommandPayload;
 import com.wangbin.ai.agent.contract.command.PromptCommandPayload;
 import com.wangbin.ai.agent.contract.coordination.DeviceRoutePayload;
 import com.wangbin.ai.agent.contract.coordination.RelayCommandDispatchPayload;
 import com.wangbin.ai.agent.contract.enums.AgentType;
+import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
 import com.wangbin.ai.agent.contract.runtime.AgentRuntimeTypes;
 import com.wangbin.ai.framework.common.exception.ServiceException;
 import com.wangbin.ai.framework.tenant.core.context.TenantContextHolder;
 import com.wangbin.ai.module.agent.controller.admin.session.vo.AgentCommandRespVO;
+import com.wangbin.ai.module.agent.controller.admin.session.vo.AgentSessionCancelReqVO;
 import com.wangbin.ai.module.agent.controller.admin.session.vo.AgentSessionCreateReqVO;
+import com.wangbin.ai.module.agent.controller.admin.session.vo.AgentSessionControlRespVO;
 import com.wangbin.ai.module.agent.controller.admin.session.vo.AgentSessionRespVO;
 import com.wangbin.ai.module.agent.controller.admin.session.vo.AgentSessionSendPromptReqVO;
 import com.wangbin.ai.module.agent.dal.dataobject.command.AgentCommandDO;
@@ -37,6 +42,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
@@ -51,6 +57,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -69,8 +77,10 @@ class AgentSessionServiceImplTest {
     private static final String TEST_PROJECT_ID = "prj-1";
     private static final String TEST_SESSION_ID = "ses-1";
     private static final String TEST_COMMAND_ID = "cmd-1";
+    private static final String TEST_CONTROL_COMMAND_ID = "cmd-cancel-1";
     private static final String TEST_MESSAGE_ID = "msg-1";
     private static final String TEST_PROMPT = "inspect project";
+    private static final String TEST_CLIENT_REQUEST_ID = "client-1";
     private static final String TEST_RELAY_NODE_ID = "relay-1";
     private static final String TEST_CONNECTION_ID = "conn-1";
     private static final String WORKSPACE_PATH_EXTENSION = "workspacePath";
@@ -83,6 +93,8 @@ class AgentSessionServiceImplTest {
     private final AgentMessageMapper messageMapper = mock(AgentMessageMapper.class);
     private final DeviceRouteLookupService routeLookupService = mock(DeviceRouteLookupService.class);
     private final RecordingRelayCommandGateway relayCommandGateway = new RecordingRelayCommandGateway();
+    private final RedissonClient redissonClient = mock(RedissonClient.class);
+    private final RLock idempotencyLock = mock(RLock.class);
     private final AgentIdFactory idFactory = mock(AgentIdFactory.class);
     private AgentSessionServiceImpl service;
 
@@ -90,8 +102,15 @@ class AgentSessionServiceImplTest {
     void setUp() {
         TenantContextHolder.setTenantId(TEST_TENANT_ID);
         service = new AgentSessionServiceImpl(sessionMapper, projectMapper, deviceMapper, runtimeMapper, commandMapper,
-                messageMapper, routeLookupService, relayCommandGateway, mock(RedissonClient.class),
+                messageMapper, routeLookupService, relayCommandGateway, redissonClient,
                 new AgentControlPlaneProperties(), idFactory, new ObjectMapper(), transactionTemplate());
+        try {
+            when(idempotencyLock.tryLock(anyLong(), any())).thenReturn(true);
+        } catch (InterruptedException ex) {
+            throw new IllegalStateException(ex);
+        }
+        when(idempotencyLock.isHeldByCurrentThread()).thenReturn(true);
+        when(redissonClient.getLock(anyString())).thenReturn(idempotencyLock);
     }
 
     @AfterEach
@@ -190,6 +209,65 @@ class AgentSessionServiceImplTest {
         verify(commandMapper).updateById(command);
     }
 
+    @Test
+    void cancelSessionCommandCreatesControlCommandAndDispatchesWithoutChangingPromptTerminalState() {
+        AgentSessionDO session = runningSession();
+        AgentCommandDO targetCommand = promptCommand(AgentCommandDbStatus.RUNNING);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(projectMapper.selectById(TEST_PROJECT_DB_ID)).thenReturn(project());
+        when(deviceMapper.selectById(TEST_DEVICE_DB_ID)).thenReturn(device());
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(targetCommand);
+        when(routeLookupService.getRoute(TEST_DEVICE_ID)).thenReturn(route());
+        when(idFactory.commandId()).thenReturn(TEST_CONTROL_COMMAND_ID);
+        AtomicReference<AgentCommandDO> controlRef = new AtomicReference<>();
+        doAnswer(invocation -> {
+            AgentCommandDO command = invocation.getArgument(0);
+            command.setId(TEST_COMMAND_DB_ID + 1);
+            controlRef.set(command);
+            return 1;
+        }).when(commandMapper).insert(any(AgentCommandDO.class));
+        when(commandMapper.selectByCommandId(TEST_CONTROL_COMMAND_ID)).thenAnswer(invocation -> controlRef.get());
+
+        AgentSessionControlRespVO response = service.cancelSessionCommand(cancelReqVO(null), TEST_USER_ID);
+
+        assertThat(response.getControlCommandId()).isEqualTo(TEST_CONTROL_COMMAND_ID);
+        assertThat(response.getAction()).isEqualTo(SessionControlAction.CANCEL);
+        assertThat(response.getTargetCommandId()).isEqualTo(TEST_COMMAND_ID);
+        assertThat(response.getCommandStatus()).isEqualTo(AgentCommandDbStatus.ROUTING.name());
+        assertThat(targetCommand.getCommandStatus()).isEqualTo(AgentCommandDbStatus.RUNNING.name());
+        assertThat(relayCommandGateway.payload.command().commandType()).isEqualTo(CommandType.CANCEL);
+        CancelCommandPayload payload = (CancelCommandPayload) relayCommandGateway.payload.command().payload();
+        assertThat(payload.targetCommandId()).isEqualTo(TEST_COMMAND_ID);
+    }
+
+    @Test
+    void cancelSessionCommandWithClientRequestIdReturnsExistingControlCommand() {
+        AgentSessionDO session = runningSession();
+        AgentCommandDO existing = controlCommand(AgentCommandDbStatus.ROUTING);
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(commandMapper.selectByClientRequestId(TEST_SESSION_DB_ID, TEST_USER_ID, CommandType.CANCEL.name(),
+                TEST_CLIENT_REQUEST_ID)).thenReturn(existing);
+
+        AgentSessionControlRespVO response = service.cancelSessionCommand(cancelReqVO(TEST_CLIENT_REQUEST_ID),
+                TEST_USER_ID);
+
+        assertThat(response.getControlCommandId()).isEqualTo(TEST_CONTROL_COMMAND_ID);
+        assertThat(response.getCommandStatus()).isEqualTo(AgentCommandDbStatus.ROUTING.name());
+        assertThat(relayCommandGateway.payload).isNull();
+    }
+
+    @Test
+    void cancelSessionCommandRejectsInactiveTargetCommand() {
+        AgentSessionDO session = runningSession();
+        when(sessionMapper.selectBySessionId(TEST_SESSION_ID)).thenReturn(session);
+        when(projectMapper.selectById(TEST_PROJECT_DB_ID)).thenReturn(project());
+        when(deviceMapper.selectById(TEST_DEVICE_DB_ID)).thenReturn(device());
+        when(commandMapper.selectByCommandId(TEST_COMMAND_ID)).thenReturn(promptCommand(AgentCommandDbStatus.SUCCEEDED));
+
+        assertThatThrownBy(() -> service.cancelSessionCommand(cancelReqVO(null), TEST_USER_ID))
+                .isInstanceOf(ServiceException.class);
+    }
+
     private void stubProjectDeviceRoute() {
         when(projectMapper.selectById(TEST_PROJECT_DB_ID)).thenReturn(project());
         when(deviceMapper.selectById(TEST_DEVICE_DB_ID)).thenReturn(device());
@@ -210,6 +288,15 @@ class AgentSessionServiceImplTest {
         return reqVO;
     }
 
+    private AgentSessionCancelReqVO cancelReqVO(String clientRequestId) {
+        AgentSessionCancelReqVO reqVO = new AgentSessionCancelReqVO();
+        reqVO.setSessionId(TEST_SESSION_ID);
+        reqVO.setTargetCommandId(TEST_COMMAND_ID);
+        reqVO.setClientRequestId(clientRequestId);
+        reqVO.setReason("cancel");
+        return reqVO;
+    }
+
     private AgentSessionDO session() {
         AgentSessionDO session = new AgentSessionDO();
         session.setId(TEST_SESSION_DB_ID);
@@ -223,6 +310,41 @@ class AgentSessionServiceImplTest {
         session.setSessionStatus(AgentSessionDbStatus.IDLE.name());
         session.setLastEventSeq(0L);
         return session;
+    }
+
+    private AgentSessionDO runningSession() {
+        AgentSessionDO session = session();
+        session.setSessionStatus(AgentSessionDbStatus.RUNNING.name());
+        return session;
+    }
+
+    private AgentCommandDO promptCommand(AgentCommandDbStatus status) {
+        AgentCommandDO command = new AgentCommandDO();
+        command.setId(TEST_COMMAND_DB_ID);
+        command.setTenantId(TEST_TENANT_ID);
+        command.setCommandId(TEST_COMMAND_ID);
+        command.setSessionId(TEST_SESSION_DB_ID);
+        command.setDeviceId(TEST_DEVICE_DB_ID);
+        command.setProjectId(TEST_PROJECT_DB_ID);
+        command.setOwnerUserId(TEST_USER_ID);
+        command.setCommandType(CommandType.PROMPT.name());
+        command.setCommandStatus(status.name());
+        return command;
+    }
+
+    private AgentCommandDO controlCommand(AgentCommandDbStatus status) {
+        AgentCommandDO command = new AgentCommandDO();
+        command.setId(TEST_COMMAND_DB_ID + 1);
+        command.setTenantId(TEST_TENANT_ID);
+        command.setCommandId(TEST_CONTROL_COMMAND_ID);
+        command.setSessionId(TEST_SESSION_DB_ID);
+        command.setDeviceId(TEST_DEVICE_DB_ID);
+        command.setProjectId(TEST_PROJECT_DB_ID);
+        command.setOwnerUserId(TEST_USER_ID);
+        command.setCommandType(CommandType.CANCEL.name());
+        command.setCommandStatus(status.name());
+        command.setRequestId(TEST_CLIENT_REQUEST_ID);
+        return command;
     }
 
     private AgentProjectDO project() {

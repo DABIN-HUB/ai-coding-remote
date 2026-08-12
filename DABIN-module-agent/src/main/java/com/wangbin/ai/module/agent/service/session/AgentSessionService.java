@@ -17,6 +17,12 @@ public interface AgentSessionService {
 
     AgentCommandRespVO sendPrompt(AgentSessionSendPromptReqVO reqVO, Long userId);
 
+    AgentSessionControlRespVO interruptSession(AgentSessionInterruptReqVO reqVO, Long userId);
+
+    AgentSessionControlRespVO cancelSessionCommand(AgentSessionCancelReqVO reqVO, Long userId);
+
+    AgentSessionControlRespVO closeSession(AgentSessionCloseReqVO reqVO, Long userId);
+
     PageResult<AgentMessageRespVO> getMessagePage(String sessionId, AgentMessagePageReqVO reqVO, Long userId);
 
     void markAckTimeout(String commandId, LocalDateTime now);

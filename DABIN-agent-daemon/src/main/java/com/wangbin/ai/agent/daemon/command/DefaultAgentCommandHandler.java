@@ -3,8 +3,12 @@ package com.wangbin.ai.agent.daemon.command;
 import com.wangbin.ai.agent.contract.command.*;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
+import com.wangbin.ai.agent.contract.enums.SessionInterruptInitiator;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
+import com.wangbin.ai.agent.contract.event.AgentEventPayload;
+import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
 import com.wangbin.ai.agent.contract.session.PromptCommand;
 import com.wangbin.ai.agent.contract.session.SessionStartRequest;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
@@ -41,29 +45,43 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     private static final String CODE_ARTIFACT_BUSY = "ARTIFACT_TRANSFER_BUSY";
     private static final String CODE_FAILED = "COMMAND_START_FAILED";
     private static final String CODE_PERMISSION_FAILED = "PERMISSION_DECISION_FAILED";
+    private static final String CODE_TARGET_NOT_ACTIVE = "TARGET_COMMAND_NOT_ACTIVE";
+    private static final String CODE_CONTROL_CONFLICT = "SESSION_CONTROL_CONFLICT";
+    private static final String CODE_CONTROL_FAILED = "SESSION_CONTROL_FAILED";
 
     private final List<CodingAgentAdapter> adapters;
     private final LocalProjectRegistry localProjectRegistry;
     private final CommandDedupCache dedupCache;
     private final WorkspaceManager workspaceManager;
     private final ArtifactTransferManager artifactTransferManager;
+    private final SessionControlIntentRegistry controlIntentRegistry;
     private final ConcurrentMap<String, CodingAgentAdapter> sessionAdapters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> activeSessionCommands = new ConcurrentHashMap<>();
 
     @Autowired
     public DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
                                       CommandDedupCache dedupCache, WorkspaceManager workspaceManager,
-                                      ArtifactTransferManager artifactTransferManager) {
+                                      ArtifactTransferManager artifactTransferManager,
+                                      SessionControlIntentRegistry controlIntentRegistry) {
         this.adapters = adapters;
         this.localProjectRegistry = localProjectRegistry;
         this.dedupCache = dedupCache;
         this.workspaceManager = workspaceManager;
         this.artifactTransferManager = artifactTransferManager;
+        this.controlIntentRegistry = controlIntentRegistry;
     }
 
     DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
                                CommandDedupCache dedupCache, WorkspaceManager workspaceManager) {
-        this(adapters, localProjectRegistry, dedupCache, workspaceManager, null);
+        this(adapters, localProjectRegistry, dedupCache, workspaceManager, null,
+                new SessionControlIntentRegistry(128));
+    }
+
+    DefaultAgentCommandHandler(List<CodingAgentAdapter> adapters, LocalProjectRegistry localProjectRegistry,
+                               CommandDedupCache dedupCache, WorkspaceManager workspaceManager,
+                               ArtifactTransferManager artifactTransferManager) {
+        this(adapters, localProjectRegistry, dedupCache, workspaceManager, artifactTransferManager,
+                new SessionControlIntentRegistry(128));
     }
 
     @Override
@@ -79,6 +97,9 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
             handlePermissionDecision(command, outboundSender);
         } else if (command.commandType() == CommandType.FETCH_ARTIFACT) {
             handleFetchArtifact(command, credential, outboundSender);
+        } else if (command.commandType() == CommandType.INTERRUPT || command.commandType() == CommandType.CANCEL
+                || command.commandType() == CommandType.CLOSE_SESSION) {
+            handleSessionControl(command, outboundSender);
         } else {
             outboundSender.sendCommandAck(rejected(command, "unsupported command type"));
         }
@@ -249,14 +270,180 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
         dedupCache.markCompleted(command.commandId());
     }
 
+    private void handleSessionControl(AgentCommand command, DaemonOutboundSender outboundSender) {
+        SessionControlRequest request = sessionControlRequest(command);
+        if (request == null) {
+            outboundSender.sendCommandAck(rejected(command, "invalid session control payload"));
+            return;
+        }
+        LocalProject project = localProjectRegistry.findByPlatformProjectId(command.projectId()).orElse(null);
+        if (project == null || project.agentType() != command.agentType()) {
+            outboundSender.sendCommandAck(rejected(command, "project is not registered locally"));
+            return;
+        }
+        try {
+            Path realWorkspace = workspaceManager.validateWorkspace(project.realWorkspace().toString());
+            if (!realWorkspace.equals(project.realWorkspace())) {
+                outboundSender.sendCommandAck(rejected(command, "workspace real path changed"));
+                return;
+            }
+        } catch (AgentCapabilityException ex) {
+            outboundSender.sendCommandAck(rejected(command, "workspace is not allowed locally"));
+            return;
+        }
+        CodingAgentAdapter adapter = sessionAdapters.get(command.sessionId());
+        if (adapter == null) {
+            outboundSender.sendCommandAck(rejected(command, "session is not active locally"));
+            return;
+        }
+        String activeCommandId = activeSessionCommands.get(command.sessionId());
+        String targetCommandId = request.targetCommandId();
+        if (request.action() == SessionControlAction.CLOSE_SESSION && isBlank(targetCommandId)) {
+            targetCommandId = activeCommandId;
+        }
+        if (request.action() != SessionControlAction.CLOSE_SESSION && isBlank(targetCommandId)) {
+            outboundSender.sendCommandAck(rejected(command, "target command is required"));
+            return;
+        }
+        if (request.action() != SessionControlAction.CLOSE_SESSION
+                && !targetCommandId.equals(activeCommandId)) {
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.REJECTED, CODE_TARGET_NOT_ACTIVE, "target command is not active",
+                    Instant.now(), Map.of()));
+            return;
+        }
+        if (request.action() == SessionControlAction.CLOSE_SESSION && activeCommandId != null
+                && !activeCommandId.equals(targetCommandId)) {
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.REJECTED, CODE_TARGET_NOT_ACTIVE, "target command is not active",
+                    Instant.now(), Map.of()));
+            return;
+        }
+        if (dedupCache.reserve(command.commandId()) == CommandDedupResult.DUPLICATE) {
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.DUPLICATE, CODE_DUPLICATE, "duplicate command", Instant.now(), Map.of()));
+            return;
+        }
+        if (activeCommandId == null && request.action() == SessionControlAction.CLOSE_SESSION) {
+            closeIdleSession(command, adapter, outboundSender);
+            return;
+        }
+        SessionControlReserveResult reserveResult = controlIntentRegistry.reserve(command.sessionId(),
+                targetCommandId, request.action(), command.commandId(), request.reason());
+        if (reserveResult == SessionControlReserveResult.DUPLICATE) {
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.DUPLICATE, CODE_DUPLICATE, "duplicate command", Instant.now(), Map.of()));
+            dedupCache.markCompleted(command.commandId());
+            return;
+        }
+        if (reserveResult != SessionControlReserveResult.RESERVED) {
+            dedupCache.release(command.commandId());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.REJECTED, CODE_CONTROL_CONFLICT, "session control command conflicts",
+                    Instant.now(), Map.of()));
+            return;
+        }
+        try {
+            adapter.cancelPendingPermissions(command.sessionId());
+            adapter.interrupt(command.sessionId());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "session control accepted", Instant.now(), Map.of()));
+            dedupCache.markCompleted(command.commandId());
+        } catch (RuntimeException ex) {
+            controlIntentRegistry.consume(command.sessionId(), targetCommandId);
+            log.warn("session control failed: sessionId={}, commandId={}, errorType={}, error={}",
+                    command.sessionId(), command.commandId(), ex.getClass().getSimpleName(), ex.getMessage());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.FAILED, CODE_CONTROL_FAILED, "session control failed", Instant.now(), Map.of()));
+        }
+    }
+
+    private void closeIdleSession(AgentCommand command, CodingAgentAdapter adapter, DaemonOutboundSender outboundSender) {
+        try {
+            adapter.cancelPendingPermissions(command.sessionId());
+            adapter.closeSession(command.sessionId(), command.commandId());
+            sessionAdapters.remove(command.sessionId(), adapter);
+            controlIntentRegistry.clearSession(command.sessionId());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.ACCEPTED, CODE_ACCEPTED, "session close accepted", Instant.now(), Map.of()));
+            dedupCache.markCompleted(command.commandId());
+        } catch (RuntimeException ex) {
+            log.warn("idle session close failed: sessionId={}, commandId={}, errorType={}, error={}",
+                    command.sessionId(), command.commandId(), ex.getClass().getSimpleName(), ex.getMessage());
+            outboundSender.sendCommandAck(new CommandAck(command.commandId(), command.sessionId(), command.deviceId(),
+                    CommandAckStatus.FAILED, CODE_CONTROL_FAILED, "session close failed", Instant.now(), Map.of()));
+        }
+    }
+
     private void handleAgentEvent(DaemonOutboundSender outboundSender, AgentEvent event) {
-        outboundSender.sendAgentEvent(event);
+        SessionControlApplied applied = applySessionControlIntent(event);
+        outboundSender.sendAgentEvent(applied.event());
         if (AgentCommandLifecyclePolicy.isTerminalForActiveCommand(event)) {
-            Object commandId = event.extensions().get(AgentEventExtensionKeys.PLATFORM_COMMAND_ID);
+            Object commandId = applied.event().extensions().get(AgentEventExtensionKeys.PLATFORM_COMMAND_ID);
             if (commandId instanceof String text && !text.isBlank()) {
-                activeSessionCommands.remove(event.sessionId(), text);
+                activeSessionCommands.remove(applied.event().sessionId(), text);
+            }
+            if (applied.event().type() == com.wangbin.ai.agent.contract.enums.AgentEventType.SESSION_COMPLETED) {
+                sessionAdapters.remove(applied.event().sessionId());
+                controlIntentRegistry.clearSession(applied.event().sessionId());
             }
         }
+        if (applied.intent() != null && applied.intent().action() == SessionControlAction.CLOSE_SESSION) {
+            CodingAgentAdapter adapter = sessionAdapters.get(applied.event().sessionId());
+            if (adapter != null) {
+                adapter.closeSession(applied.event().sessionId(), applied.intent().controlCommandId());
+            }
+        }
+    }
+
+    private SessionControlApplied applySessionControlIntent(AgentEvent event) {
+        if (event.type() != com.wangbin.ai.agent.contract.enums.AgentEventType.SESSION_INTERRUPTED
+                || !(event.payload() instanceof SessionInterruptedPayload payload)) {
+            return new SessionControlApplied(event, null);
+        }
+        String targetCommandId = payload.targetCommandId();
+        if (isBlank(targetCommandId)) {
+            Object commandId = event.extensions().get(AgentEventExtensionKeys.PLATFORM_COMMAND_ID);
+            targetCommandId = commandId instanceof String text ? text : null;
+        }
+        if (isBlank(targetCommandId)) {
+            return new SessionControlApplied(event, null);
+        }
+        String resolvedTargetCommandId = targetCommandId;
+        return controlIntentRegistry.consume(event.sessionId(), resolvedTargetCommandId).map(intent -> {
+            SessionInterruptedPayload enriched = new SessionInterruptedPayload(payload.nativeSessionId(),
+                    resolvedTargetCommandId, intent.controlCommandId(), intent.action(),
+                    initiator(intent.action()), intent.reason(), payload.extensions());
+            return new SessionControlApplied(copyPayload(event, enriched), intent);
+        }).orElse(new SessionControlApplied(event, null));
+    }
+
+    private SessionInterruptInitiator initiator(SessionControlAction action) {
+        return action == SessionControlAction.CLOSE_SESSION ? SessionInterruptInitiator.SESSION_CLOSE
+                : SessionInterruptInitiator.USER;
+    }
+
+    private AgentEvent copyPayload(AgentEvent source, AgentEventPayload payload) {
+        return new AgentEvent(source.eventId(), source.traceId(), source.tenantId(), source.userId(),
+                source.deviceId(), source.projectId(), source.sessionId(), source.seq(), source.agentType(),
+                source.type(), source.priority(), source.timestamp(), payload, source.extensions());
+    }
+
+    private SessionControlRequest sessionControlRequest(AgentCommand command) {
+        if (command.commandType() == CommandType.INTERRUPT
+                && command.payload() instanceof InterruptCommandPayload payload) {
+            return new SessionControlRequest(SessionControlAction.INTERRUPT, payload.targetCommandId(),
+                    payload.reason());
+        }
+        if (command.commandType() == CommandType.CANCEL && command.payload() instanceof CancelCommandPayload payload) {
+            return new SessionControlRequest(SessionControlAction.CANCEL, payload.targetCommandId(), payload.reason());
+        }
+        if (command.commandType() == CommandType.CLOSE_SESSION
+                && command.payload() instanceof CloseSessionCommandPayload payload) {
+            return new SessionControlRequest(SessionControlAction.CLOSE_SESSION, payload.targetCommandId(),
+                    payload.reason());
+        }
+        return null;
     }
 
     private boolean isPermissionDecisionConsistent(CommandType commandType,
@@ -298,5 +485,15 @@ public class DefaultAgentCommandHandler implements AgentCommandHandler {
     private CommandAck busy(AgentCommand command) {
         return new CommandAck(command.commandId(), command.sessionId(), command.deviceId(), CommandAckStatus.REJECTED,
                 CODE_BUSY, "session already has an active prompt command", Instant.now(), Map.of());
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private record SessionControlRequest(SessionControlAction action, String targetCommandId, String reason) {
+    }
+
+    private record SessionControlApplied(AgentEvent event, SessionControlIntent intent) {
     }
 }

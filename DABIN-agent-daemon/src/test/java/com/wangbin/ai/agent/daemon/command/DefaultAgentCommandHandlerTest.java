@@ -7,9 +7,11 @@ import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.CommandType;
 import com.wangbin.ai.agent.contract.enums.EventPriority;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentErrorPayload;
 import com.wangbin.ai.agent.contract.event.AgentEventExtensionKeys;
+import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
 import com.wangbin.ai.agent.contract.event.SessionPayload;
 import com.wangbin.ai.agent.contract.session.*;
 import com.wangbin.ai.agent.daemon.adapter.CodingAgentAdapter;
@@ -347,6 +349,88 @@ class DefaultAgentCommandHandlerTest {
         assertThat(outboundSender.acks).extracting(CommandAck::status).containsExactly(CommandAckStatus.ACCEPTED);
     }
 
+    @Test
+    void cancelBypassesPromptBusyCancelsPendingPermissionAndInterruptsNativeTurnOnce() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+        AgentCommand cancel = cancelCommand("cmd-cancel-1", TEST_COMMAND_ID);
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(cancel, credential(), outboundSender);
+        handler.handle(cancel, credential(), outboundSender);
+        handler.handle(promptCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+
+        assertThat(adapter.cancelPendingPermissionCalls).hasValue(1);
+        assertThat(adapter.interruptCalls).hasValue(1);
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.ACCEPTED, CommandAckStatus.DUPLICATE,
+                        CommandAckStatus.REJECTED);
+        assertThat(outboundSender.acks.get(3).code()).isEqualTo("SESSION_BUSY");
+    }
+
+    @Test
+    void interruptedLifecycleReleasesPromptAndEnrichesCancelIntent() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(cancelCommand("cmd-cancel-1", TEST_COMMAND_ID), credential(), outboundSender);
+        adapter.emit(sessionInterruptedEvent(TEST_COMMAND_ID));
+        handler.handle(promptCommand(TEST_COMMAND_ID_SECOND), credential(), outboundSender);
+
+        AgentEvent interrupted = outboundSender.events.stream()
+                .filter(event -> event.type() == AgentEventType.SESSION_INTERRUPTED)
+                .findFirst()
+                .orElseThrow();
+        SessionInterruptedPayload payload = (SessionInterruptedPayload) interrupted.payload();
+        assertThat(payload.action()).isEqualTo(SessionControlAction.CANCEL);
+        assertThat(payload.targetCommandId()).isEqualTo(TEST_COMMAND_ID);
+        assertThat(payload.controlCommandId()).isEqualTo("cmd-cancel-1");
+        assertThat(adapter.sendPromptCalls).hasValue(2);
+    }
+
+    @Test
+    void wrongTargetControlCommandIsRejectedWithoutNativeInterrupt() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(cancelCommand("cmd-cancel-1", "cmd-other"), credential(), outboundSender);
+
+        assertThat(adapter.interruptCalls).hasValue(0);
+        assertThat(outboundSender.acks).extracting(CommandAck::status)
+                .containsExactly(CommandAckStatus.ACCEPTED, CommandAckStatus.REJECTED);
+        assertThat(outboundSender.acks.get(1).code()).isEqualTo("TARGET_COMMAND_NOT_ACTIVE");
+    }
+
+    @Test
+    void closeActiveSessionInterruptsThenClosesAfterInterruptedLifecycle() {
+        RecordingAdapter adapter = new RecordingAdapter();
+        RecordingOutboundSender outboundSender = new RecordingOutboundSender(adapter);
+        DefaultAgentCommandHandler handler = new DefaultAgentCommandHandler(List.of(adapter), registry(),
+                new InMemoryCommandDedupCache(new AgentDaemonProperties()), workspaceManager());
+
+        handler.handle(promptCommand(TEST_COMMAND_ID), credential(), outboundSender);
+        handler.handle(closeCommand("cmd-close-1", TEST_COMMAND_ID), credential(), outboundSender);
+        adapter.emit(sessionInterruptedEvent(TEST_COMMAND_ID));
+
+        assertThat(adapter.interruptCalls).hasValue(1);
+        assertThat(adapter.closeSessionCalls).hasValue(1);
+        assertThat(adapter.closeSessionControlCommandId).isEqualTo("cmd-close-1");
+        SessionInterruptedPayload payload = (SessionInterruptedPayload) outboundSender.events.stream()
+                .filter(event -> event.type() == AgentEventType.SESSION_INTERRUPTED)
+                .findFirst()
+                .orElseThrow()
+                .payload();
+        assertThat(payload.action()).isEqualTo(SessionControlAction.CLOSE_SESSION);
+    }
+
     private AgentCommand promptCommand(String commandId) {
         return promptCommand(commandId, TEST_SESSION_ID, TEST_DEVICE_ID);
     }
@@ -378,6 +462,20 @@ class DefaultAgentCommandHandlerTest {
                 Instant.now(), Instant.now().plusSeconds(30), Map.of());
     }
 
+    private AgentCommand cancelCommand(String commandId, String targetCommandId) {
+        return new AgentCommand(commandId, commandId, TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, AgentType.CODEX, CommandType.CANCEL,
+                new CancelCommandPayload(targetCommandId, "cancel", Map.of()),
+                Instant.now(), Instant.now().plusSeconds(30), Map.of());
+    }
+
+    private AgentCommand closeCommand(String commandId, String targetCommandId) {
+        return new AgentCommand(commandId, commandId, TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID,
+                TEST_PROJECT_ID, TEST_SESSION_ID, AgentType.CODEX, CommandType.CLOSE_SESSION,
+                new CloseSessionCommandPayload(targetCommandId, "close", Map.of()),
+                Instant.now(), Instant.now().plusSeconds(30), Map.of());
+    }
+
     private DeviceCredentialState credential() {
         DeviceCredentialState credential = new DeviceCredentialState();
         credential.setTenantId(TEST_TENANT_ID);
@@ -400,6 +498,15 @@ class DefaultAgentCommandHandlerTest {
                 TEST_DEVICE_ID, TEST_PROJECT_ID, TEST_SESSION_ID, 1L, AgentType.CODEX, AgentEventType.ERROR,
                 EventPriority.IMPORTANT, Instant.now(),
                 new AgentErrorPayload("codex_error", "error", retryable, Map.of()),
+                Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, commandId));
+    }
+
+    private AgentEvent sessionInterruptedEvent(String commandId) {
+        return new AgentEvent("event-interrupted-" + commandId, "trace-1", TEST_TENANT_ID, TEST_USER_ID,
+                TEST_DEVICE_ID, TEST_PROJECT_ID, TEST_SESSION_ID, 1L, AgentType.CODEX,
+                AgentEventType.SESSION_INTERRUPTED, EventPriority.CRITICAL, Instant.now(),
+                new SessionInterruptedPayload("native-1", commandId, null, SessionControlAction.INTERRUPT,
+                        null, "interrupted", Map.of()),
                 Map.of(AgentEventExtensionKeys.PLATFORM_COMMAND_ID, commandId));
     }
 
@@ -467,6 +574,7 @@ class DefaultAgentCommandHandlerTest {
 
         private final RecordingAdapter adapter;
         private final List<CommandAck> acks = new ArrayList<>();
+        private final List<AgentEvent> events = new ArrayList<>();
         private final boolean acceptCommandAcks;
         private boolean acceptedAckBeforePrompt;
 
@@ -495,6 +603,7 @@ class DefaultAgentCommandHandlerTest {
 
         @Override
         public boolean sendAgentEvent(AgentEvent event) {
+            events.add(event);
             return acceptAgentEvents;
         }
 
@@ -506,9 +615,13 @@ class DefaultAgentCommandHandlerTest {
         private final AtomicInteger startSessionCalls = new AtomicInteger();
         private final AtomicInteger sendPromptCalls = new AtomicInteger();
         private final AtomicInteger resolvePermissionCalls = new AtomicInteger();
+        private final AtomicInteger interruptCalls = new AtomicInteger();
+        private final AtomicInteger cancelPendingPermissionCalls = new AtomicInteger();
+        private final AtomicInteger closeSessionCalls = new AtomicInteger();
         private final Sinks.Many<AgentEvent> eventSink = Sinks.many().multicast().directBestEffort();
         private boolean failSendPrompt;
         private boolean failResolvePermission;
+        private String closeSessionControlCommandId;
 
         @Override
         public AgentType agentType() {
@@ -538,6 +651,12 @@ class DefaultAgentCommandHandlerTest {
 
         @Override
         public void interrupt(String sessionId) {
+            interruptCalls.incrementAndGet();
+        }
+
+        @Override
+        public void cancelPendingPermissions(String sessionId) {
+            cancelPendingPermissionCalls.incrementAndGet();
         }
 
         @Override
@@ -556,6 +675,13 @@ class DefaultAgentCommandHandlerTest {
 
         @Override
         public void closeSession(String sessionId) {
+            closeSessionCalls.incrementAndGet();
+        }
+
+        @Override
+        public void closeSession(String sessionId, String controlCommandId) {
+            closeSessionCalls.incrementAndGet();
+            closeSessionControlCommandId = controlCommandId;
         }
 
         private void emit(AgentEvent event) {

@@ -14,7 +14,7 @@ public record AgentCapabilities(
 ) {
 
     public static AgentCapabilities codexDefault() {
-        return new AgentCapabilities(true, false, true, false, true, true, false, false, false, false);
+        return new AgentCapabilities(true, false, true, false, true, true, false, false, true, true);
     }
 
     public static AgentCapabilities unknown() {

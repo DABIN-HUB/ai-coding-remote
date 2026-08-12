@@ -5,6 +5,7 @@ public enum AgentEventType {
     SESSION_STARTED(EventPriority.CRITICAL),
     SESSION_STATE_CHANGED(EventPriority.IMPORTANT),
     SESSION_IDLE(EventPriority.NORMAL),
+    SESSION_INTERRUPTED(EventPriority.CRITICAL),
     SESSION_COMPLETED(EventPriority.CRITICAL),
 
     AGENT_MESSAGE(EventPriority.IMPORTANT),

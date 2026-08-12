@@ -18,8 +18,8 @@ class AgentCapabilitiesTest {
         assertThat(capabilities.artifact()).isTrue();
         assertThat(capabilities.plan()).isFalse();
         assertThat(capabilities.imageInput()).isFalse();
-        assertThat(capabilities.cancel()).isFalse();
-        assertThat(capabilities.interrupt()).isFalse();
+        assertThat(capabilities.cancel()).isTrue();
+        assertThat(capabilities.interrupt()).isTrue();
     }
 
 }

@@ -56,6 +56,29 @@ public class AgentSessionController {
         return success(sessionService.sendPrompt(reqVO, getLoginUserId()));
     }
 
+    @PostMapping("/interrupt")
+    @Operation(summary = "中断 Agent Session 当前 Prompt")
+    @PreAuthorize("@ss.hasPermission('agent:session:cancel')")
+    public CommonResult<AgentSessionControlRespVO> interruptSession(
+            @Valid @RequestBody AgentSessionInterruptReqVO reqVO) {
+        return success(sessionService.interruptSession(reqVO, getLoginUserId()));
+    }
+
+    @PostMapping("/cancel")
+    @Operation(summary = "取消 Agent Session 当前 Prompt")
+    @PreAuthorize("@ss.hasPermission('agent:session:cancel')")
+    public CommonResult<AgentSessionControlRespVO> cancelSessionCommand(
+            @Valid @RequestBody AgentSessionCancelReqVO reqVO) {
+        return success(sessionService.cancelSessionCommand(reqVO, getLoginUserId()));
+    }
+
+    @PostMapping("/close")
+    @Operation(summary = "关闭 Agent Session")
+    @PreAuthorize("@ss.hasPermission('agent:session:cancel')")
+    public CommonResult<AgentSessionControlRespVO> closeSession(@Valid @RequestBody AgentSessionCloseReqVO reqVO) {
+        return success(sessionService.closeSession(reqVO, getLoginUserId()));
+    }
+
     @GetMapping("/messagePage")
     @Operation(summary = "获取 Session 最终消息分页")
     @Parameter(name = "sessionId", description = "平台 Session 业务编号", required = true)

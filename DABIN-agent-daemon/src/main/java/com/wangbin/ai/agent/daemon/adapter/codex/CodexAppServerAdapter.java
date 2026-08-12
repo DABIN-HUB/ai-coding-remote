@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
+import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.PermissionDecision;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
@@ -219,32 +220,43 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     @Override
+    public void cancelPendingPermissions(String sessionId) {
+        pendingPermissionRegistry.removeBySession(sessionId).forEach(permission -> {
+            CodexJsonRpcClient client = rpcClient;
+            if (client != null && !client.isClosed()) {
+                try {
+                    client.respond(permission.nativeRequestId(),
+                            permissionDecisionMapper.responseResult(PermissionDecision.CANCELLED));
+                } catch (RuntimeException ignored) {
+                    // Runtime shutdown may already have closed stdin; local cleanup remains authoritative.
+                }
+            }
+        });
+    }
+
+    @Override
     public Flux<AgentEvent> events(String sessionId) {
         return eventSink.asFlux().filter(event -> sessionId.equals(event.sessionId()));
     }
 
     @Override
     public void closeSession(String sessionId) {
+        closeSession(sessionId, null);
+    }
+
+    @Override
+    public void closeSession(String sessionId, String controlCommandId) {
         CodexSessionContext removed = platformSessions.remove(sessionId);
         if (removed != null) {
             eventAggregator.closeSession(removed.platformSessionId(), removed::nextSeq,
                             event -> emitSequenced(event, removed))
                     .forEach(event -> emitSequenced(event, removed));
+            emit(sessionCompletedEvent(removed, controlCommandId), removed);
             changeSetAccumulator.clearSession(removed.platformSessionId());
             sessionEventEmitter.releaseSession(removed.platformSessionId());
             nativeSessions.remove(removed.nativeSessionId());
             activeTurnIds.remove(sessionId);
-            pendingPermissionRegistry.removeBySession(sessionId).forEach(permission -> {
-                CodexJsonRpcClient client = rpcClient;
-                if (client != null && !client.isClosed()) {
-                    try {
-                        client.respond(permission.nativeRequestId(),
-                                permissionDecisionMapper.responseResult(PermissionDecision.CANCELLED));
-                    } catch (RuntimeException ignored) {
-                        // Runtime shutdown may already have closed stdin; local cleanup remains authoritative.
-                    }
-                }
-            });
+            cancelPendingPermissions(sessionId);
         }
         if (platformSessions.isEmpty() && managedProcess != null) {
             stopRuntime();
@@ -402,6 +414,17 @@ public class CodexAppServerAdapter implements CodingAgentAdapter {
                 new PermissionResolvedPayload(pending.permissionId(), pending.permissionType(), pending.decision(),
                         pending.resolutionStatus(), pending.decisionCommandId(), pending.resolvedAt(), null,
                         pending.extensions()));
+    }
+
+    private AgentEvent sessionCompletedEvent(CodexSessionContext context, String controlCommandId) {
+        Map<String, Object> extensions = controlCommandId == null || controlCommandId.isBlank()
+                ? Map.of(AgentEventExtensionKeys.NATIVE_METHOD, "local/closeSession")
+                : Map.of(AgentEventExtensionKeys.NATIVE_METHOD, "local/closeSession",
+                AgentEventExtensionKeys.PLATFORM_COMMAND_ID, controlCommandId);
+        return new AgentEvent(null, null, context.tenantId(), context.userId(), context.deviceId(),
+                context.projectId(), context.platformSessionId(), 0, context.agentType(), AgentEventType.SESSION_COMPLETED,
+                null, null, new SessionPayload(context.nativeSessionId(), AgentSessionStatus.COMPLETED,
+                "session closed locally", Map.of()), extensions);
     }
 
     private AgentEvent warningEvent(CodexSessionContext context, String message) {

@@ -51,6 +51,11 @@ public class LocalFileClient extends AbstractFileClient<LocalFileClientConfig> {
     }
 
     @Override
+    public boolean supportsStreamingUpload() {
+        return true;
+    }
+
+    @Override
     public void delete(String path) {
         String filePath = getFilePath(path);
         FileUtil.del(filePath);
@@ -78,6 +83,11 @@ public class LocalFileClient extends AbstractFileClient<LocalFileClientConfig> {
         try (InputStream inputStream = Files.newInputStream(filePath)) {
             IoUtil.copy(inputStream, outputStream);
         }
+    }
+
+    @Override
+    public boolean supportsStreamingDownload() {
+        return true;
     }
 
     private String getFilePath(String path) {

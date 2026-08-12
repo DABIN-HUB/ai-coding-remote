@@ -75,6 +75,11 @@ public class FtpFileClient extends AbstractFileClient<FtpFileClientConfig> {
     }
 
     @Override
+    public boolean supportsStreamingUpload() {
+        return true;
+    }
+
+    @Override
     public void delete(String path) {
         String filePath = getFilePath(path);
         reconnectIfTimeout();
@@ -99,6 +104,11 @@ public class FtpFileClient extends AbstractFileClient<FtpFileClientConfig> {
         String dir = StrUtil.removeSuffix(filePath, fileName);
         reconnectIfTimeout();
         ftp.download(dir, fileName, outputStream);
+    }
+
+    @Override
+    public boolean supportsStreamingDownload() {
+        return true;
     }
 
     private String getFilePath(String path) {

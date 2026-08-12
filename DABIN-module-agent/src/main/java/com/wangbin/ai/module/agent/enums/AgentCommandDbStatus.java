@@ -8,6 +8,8 @@ public enum AgentCommandDbStatus {
     ACKED,
     RUNNING,
     SUCCEEDED,
+    CANCELLED,
+    INTERRUPTED,
     FAILED,
     REJECTED,
     TIMEOUT

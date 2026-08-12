@@ -9,6 +9,7 @@ import cn.hutool.crypto.digest.DigestUtil;
 import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.framework.common.util.http.HttpUtils;
 import com.wangbin.ai.framework.common.util.object.BeanUtils;
+import com.wangbin.ai.module.infra.api.file.dto.FileClientCapabilityRespDTO;
 import com.wangbin.ai.module.infra.api.file.dto.FileUploadReqDTO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FileCreateReqVO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePageReqVO;
@@ -274,6 +275,18 @@ public class FileServiceImpl implements FileService {
         FileClient client = fileConfigService.getFileClient(configId);
         Assert.notNull(client, "客户端({}) 不能为空", configId);
         client.writeContent(path, outputStream);
+    }
+
+    @Override
+    public FileClientCapabilityRespDTO getFileClientCapability(Long configId) {
+        FileClient client = configId == null ? fileConfigService.getMasterFileClient()
+                : fileConfigService.getFileClient(configId);
+        Assert.notNull(client, "瀹㈡埛绔?{}) 涓嶈兘涓虹┖", configId == null ? "master" : configId);
+        FileClientCapabilityRespDTO respDTO = new FileClientCapabilityRespDTO();
+        respDTO.setConfigId(client.getId());
+        respDTO.setStreamingUpload(client.supportsStreamingUpload());
+        respDTO.setStreamingDownload(client.supportsStreamingDownload());
+        return respDTO;
     }
 
     @Override

@@ -4,6 +4,7 @@ import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FileCreateReqVO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePageReqVO;
 import com.wangbin.ai.module.infra.controller.admin.file.vo.file.FilePresignedUrlRespVO;
+import com.wangbin.ai.module.infra.api.file.dto.FileClientCapabilityRespDTO;
 import com.wangbin.ai.module.infra.dal.dataobject.file.FileDO;
 import com.wangbin.ai.module.infra.api.file.dto.FileUploadReqDTO;
 import jakarta.validation.constraints.NotEmpty;
@@ -104,6 +105,14 @@ public interface FileService {
      * @param outputStream 输出流
      */
     void writeFileContent(Long configId, String path, OutputStream outputStream) throws Exception;
+
+    /**
+     * 获得指定文件配置的客户端能力。configId 为空时使用当前 master 配置。
+     *
+     * @param configId 配置编号
+     * @return 文件客户端能力
+     */
+    FileClientCapabilityRespDTO getFileClientCapability(Long configId);
 
     /**
      * 获得文件

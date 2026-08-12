@@ -44,6 +44,7 @@ import com.wangbin.ai.module.agent.service.command.RelayCommandGateway;
 import com.wangbin.ai.module.agent.service.device.DeviceCredentialAuthService;
 import com.wangbin.ai.module.agent.service.device.DeviceCredentialIdentity;
 import com.wangbin.ai.module.infra.api.file.FileApi;
+import com.wangbin.ai.module.infra.api.file.dto.FileClientCapabilityRespDTO;
 import com.wangbin.ai.module.infra.api.file.dto.FileRespDTO;
 import com.wangbin.ai.module.infra.api.file.dto.FileUploadReqDTO;
 import lombok.RequiredArgsConstructor;
@@ -163,6 +164,7 @@ public class AgentArtifactServiceImpl implements AgentArtifactService {
         if (file == null) {
             throw exception(ARTIFACT_FILE_STORE_FAILED);
         }
+        validateProviderDownloadLimit(file.getConfigId(), safeLong(artifact.getFileSize()));
         fileApi.writeFileContent(file.getConfigId(), file.getPath(), outputStream);
     }
 
@@ -280,6 +282,11 @@ public class AgentArtifactServiceImpl implements AgentArtifactService {
         int count = 0;
         for (AgentArtifactDO artifact : artifactMapper.selectExpiredReady(LocalDateTime.now(),
                 artifactProperties.getCleanupBatchSize())) {
+            RLock lock = redissonClient.getLock(AgentCoordinationKeys.artifactCleanupLock(
+                    TenantContextHolder.getRequiredTenantId(), artifact.getArtifactId()));
+            if (!lock.tryLock()) {
+                continue;
+            }
             try {
                 fileApi.deleteFile(artifact.getFileId());
                 artifact.setArtifactStatus(ArtifactStatus.EXPIRED.name());
@@ -287,6 +294,10 @@ public class AgentArtifactServiceImpl implements AgentArtifactService {
                 count++;
             } catch (Exception ex) {
                 log.warn("artifact cleanup failed: artifactId={}, error={}", artifact.getArtifactId(), ex.getMessage());
+            } finally {
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
             }
         }
         return count;
@@ -416,6 +427,7 @@ public class AgentArtifactServiceImpl implements AgentArtifactService {
                 && !ArtifactStatus.UPLOADING.name().equals(artifact.getArtifactStatus())) {
             throw exception(ARTIFACT_SOURCE_INVALID);
         }
+        validateProviderUploadLimit(reqVO.getFileSize());
         artifact.setArtifactStatus(ArtifactStatus.UPLOADING.name());
         artifact.setContentType(reqVO.getContentType());
         artifact.setFileSize(reqVO.getFileSize());
@@ -463,6 +475,22 @@ public class AgentArtifactServiceImpl implements AgentArtifactService {
                 || ticket.expectedSize() != safeLong(artifact.getFileSize())
                 || !ticket.expectedSha256().equalsIgnoreCase(artifact.getSha256())) {
             throw exception(ARTIFACT_SOURCE_INVALID);
+        }
+    }
+
+    private void validateProviderUploadLimit(long fileSize) {
+        FileClientCapabilityRespDTO capability = fileApi.getFileClientCapability(artifactProperties.getFileConfigId());
+        if (!Boolean.TRUE.equals(capability.getStreamingUpload())
+                && fileSize > artifactProperties.getNonStreamingMaxFileSize()) {
+            throw exception(ARTIFACT_NON_STREAMING_SIZE_EXCEEDED);
+        }
+    }
+
+    private void validateProviderDownloadLimit(Long configId, long fileSize) {
+        FileClientCapabilityRespDTO capability = fileApi.getFileClientCapability(configId);
+        if (!Boolean.TRUE.equals(capability.getStreamingDownload())
+                && fileSize > artifactProperties.getNonStreamingMaxFileSize()) {
+            throw exception(ARTIFACT_NON_STREAMING_SIZE_EXCEEDED);
         }
     }
 

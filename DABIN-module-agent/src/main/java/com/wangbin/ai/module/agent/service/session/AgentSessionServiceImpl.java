@@ -3,12 +3,17 @@ package com.wangbin.ai.module.agent.service.session;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangbin.ai.agent.contract.command.AgentCommand;
+import com.wangbin.ai.agent.contract.command.AgentCommandPayload;
+import com.wangbin.ai.agent.contract.command.CancelCommandPayload;
+import com.wangbin.ai.agent.contract.command.CloseSessionCommandPayload;
+import com.wangbin.ai.agent.contract.command.InterruptCommandPayload;
 import com.wangbin.ai.agent.contract.command.PromptCommandPayload;
 import com.wangbin.ai.agent.contract.coordination.AgentCoordinationKeys;
 import com.wangbin.ai.agent.contract.coordination.DeviceRoutePayload;
 import com.wangbin.ai.agent.contract.coordination.RelayCommandDispatchPayload;
 import com.wangbin.ai.agent.contract.enums.AgentType;
 import com.wangbin.ai.agent.contract.enums.CommandType;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
 import com.wangbin.ai.agent.contract.runtime.AgentRuntimeTypes;
 import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.framework.tenant.core.context.TenantContextHolder;
@@ -141,6 +146,24 @@ public class AgentSessionServiceImpl implements AgentSessionService {
     }
 
     @Override
+    public AgentSessionControlRespVO interruptSession(AgentSessionInterruptReqVO reqVO, Long userId) {
+        return controlSession(SessionControlAction.INTERRUPT, reqVO.getSessionId(), reqVO.getTargetCommandId(),
+                reqVO.getClientRequestId(), reqVO.getReason(), userId);
+    }
+
+    @Override
+    public AgentSessionControlRespVO cancelSessionCommand(AgentSessionCancelReqVO reqVO, Long userId) {
+        return controlSession(SessionControlAction.CANCEL, reqVO.getSessionId(), reqVO.getTargetCommandId(),
+                reqVO.getClientRequestId(), reqVO.getReason(), userId);
+    }
+
+    @Override
+    public AgentSessionControlRespVO closeSession(AgentSessionCloseReqVO reqVO, Long userId) {
+        return controlSession(SessionControlAction.CLOSE_SESSION, reqVO.getSessionId(), reqVO.getTargetCommandId(),
+                reqVO.getClientRequestId(), reqVO.getReason(), userId);
+    }
+
+    @Override
     public PageResult<AgentMessageRespVO> getMessagePage(String sessionId, AgentMessagePageReqVO reqVO, Long userId) {
         AgentSessionDO session = requireSession(sessionId, userId);
         PageResult<AgentMessageDO> page = messageMapper.selectPage(reqVO, session.getId());
@@ -213,6 +236,161 @@ public class AgentSessionServiceImpl implements AgentSessionService {
         return toCommandRespVO(commandMapper.selectByCommandId(command.getCommandId()));
     }
 
+    private AgentSessionControlRespVO controlSession(SessionControlAction action, String sessionId,
+                                                     String targetCommandId, String clientRequestId, String reason,
+                                                     Long userId) {
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            return createAndDispatchControl(action, sessionId, targetCommandId, reason, clientRequestId, userId);
+        }
+        RLock lock = redissonClient.getLock(AgentCoordinationKeys.sessionControlIdempotencyLock(
+                TenantContextHolder.getRequiredTenantId(), userId, action.name(), sessionId, targetCommandId,
+                clientRequestId));
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(properties.getCommandIdempotencyLockWaitTime().toMillis(), TimeUnit.MILLISECONDS);
+            if (!locked) {
+                throw exception(COMMAND_DUPLICATE_REQUEST);
+            }
+            AgentSessionDO session = requireSession(sessionId, userId);
+            AgentCommandDO existing = commandMapper.selectByClientRequestId(session.getId(), userId,
+                    commandType(action).name(), clientRequestId);
+            if (existing != null) {
+                return toControlRespVO(existing, session, action, targetCommandId);
+            }
+            return createAndDispatchControl(action, session, targetCommandId, reason, clientRequestId, userId);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw exception(COMMAND_DUPLICATE_REQUEST);
+        } finally {
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    private AgentSessionControlRespVO createAndDispatchControl(SessionControlAction action, String sessionId,
+                                                               String targetCommandId, String reason,
+                                                               String clientRequestId, Long userId) {
+        return createAndDispatchControl(action, requireSession(sessionId, userId), targetCommandId, reason,
+                clientRequestId, userId);
+    }
+
+    private AgentSessionControlRespVO createAndDispatchControl(SessionControlAction action, AgentSessionDO session,
+                                                               String targetCommandId, String reason,
+                                                               String clientRequestId, Long userId) {
+        AgentSessionControlDispatchContext context = transactionTemplate.execute(status ->
+                createControlCommand(action, session, targetCommandId, reason, clientRequestId, userId));
+        if (context == null) {
+            throw exception(SESSION_CONTROL_NOT_ALLOWED);
+        }
+        return dispatchControlCommand(context);
+    }
+
+    private AgentSessionControlDispatchContext createControlCommand(SessionControlAction action, AgentSessionDO session,
+                                                                    String targetCommandId, String reason,
+                                                                    String clientRequestId, Long userId) {
+        if (session.isClosed()) {
+            throw exception(SESSION_CLOSED);
+        }
+        AgentProjectDO project = requireProject(session.getProjectId(), userId);
+        AgentDeviceDO device = requireActiveDevice(session.getDeviceId(), userId);
+        AgentCommandDO targetCommand = targetControlCommand(action, session, targetCommandId, userId);
+        String resolvedTargetCommandId = targetCommand == null ? targetCommandId : targetCommand.getCommandId();
+        AgentCommandDO command = createControlCommandDO(action, session, project, device, resolvedTargetCommandId,
+                reason, clientRequestId, userId);
+        commandMapper.insert(command);
+        return new AgentSessionControlDispatchContext(session, project, device, command, action,
+                resolvedTargetCommandId, reason);
+    }
+
+    private AgentSessionControlRespVO dispatchControlCommand(AgentSessionControlDispatchContext context) {
+        DeviceRoutePayload route = routeLookupService.getRoute(context.device().getDeviceId());
+        if (!isRouteValid(route, context.session().getTenantId(), context.device().getDeviceId())) {
+            markCommandFailed(context.command().getCommandId(), ROUTE_UNAVAILABLE_CODE, "Device route is unavailable");
+            return toControlRespVO(commandMapper.selectByCommandId(context.command().getCommandId()),
+                    context.session(), context.action(), context.targetCommandId());
+        }
+        markCommandRouting(context.command().getCommandId());
+        try {
+            relayCommandGateway.dispatch(new RelayCommandDispatchPayload(route.relayNodeId(),
+                    context.device().getDeviceId(), route.connectionId(), context.session().getTenantId(),
+                    toAgentCommand(context), Instant.now()));
+        } catch (RuntimeException ex) {
+            markCommandFailed(context.command().getCommandId(), sessionControlFailedCode(context.action()),
+                    "Session control dispatch failed");
+            throw exception(sessionControlErrorCode(context.action()));
+        }
+        return toControlRespVO(commandMapper.selectByCommandId(context.command().getCommandId()), context.session(),
+                context.action(), context.targetCommandId());
+    }
+
+    private AgentCommandDO targetControlCommand(SessionControlAction action, AgentSessionDO session,
+                                                String targetCommandId, Long userId) {
+        if (action == SessionControlAction.CLOSE_SESSION && (targetCommandId == null || targetCommandId.isBlank())) {
+            AgentCommandDO activePrompt = commandMapper.selectActivePromptBySessionId(session.getId());
+            if (activePrompt != null) {
+                ensureTargetCommandActive(activePrompt, session, userId);
+            }
+            return activePrompt;
+        }
+        AgentCommandDO targetCommand = requireTargetCommand(targetCommandId, session, userId);
+        ensureTargetCommandActive(targetCommand, session, userId);
+        ensureSessionControlAllowed(session);
+        return targetCommand;
+    }
+
+    private AgentCommandDO requireTargetCommand(String targetCommandId, AgentSessionDO session, Long userId) {
+        if (targetCommandId == null || targetCommandId.isBlank()) {
+            throw exception(SESSION_CONTROL_TARGET_NOT_ACTIVE);
+        }
+        AgentCommandDO targetCommand = commandMapper.selectByCommandId(targetCommandId);
+        if (targetCommand == null) {
+            throw exception(COMMAND_NOT_EXISTS);
+        }
+        if (!userId.equals(targetCommand.getOwnerUserId()) || !session.getId().equals(targetCommand.getSessionId())
+                || !session.getDeviceId().equals(targetCommand.getDeviceId())
+                || !session.getProjectId().equals(targetCommand.getProjectId())
+                || !CommandType.PROMPT.name().equals(targetCommand.getCommandType())) {
+            throw exception(SESSION_CONTROL_TARGET_NOT_ACTIVE);
+        }
+        return targetCommand;
+    }
+
+    private void ensureTargetCommandActive(AgentCommandDO command, AgentSessionDO session, Long userId) {
+        requireTargetCommand(command.getCommandId(), session, userId);
+        AgentCommandDbStatus status = AgentCommandDbStatus.valueOf(command.getCommandStatus());
+        if (status != AgentCommandDbStatus.ACKED && status != AgentCommandDbStatus.RUNNING) {
+            throw exception(SESSION_CONTROL_TARGET_NOT_ACTIVE);
+        }
+    }
+
+    private void ensureSessionControlAllowed(AgentSessionDO session) {
+        AgentSessionDbStatus status = AgentSessionDbStatus.valueOf(session.getSessionStatus());
+        if (status != AgentSessionDbStatus.RUNNING && status != AgentSessionDbStatus.WAITING_PERMISSION) {
+            throw exception(SESSION_CONTROL_NOT_ALLOWED);
+        }
+    }
+
+    private AgentCommandDO createControlCommandDO(SessionControlAction action, AgentSessionDO session,
+                                                  AgentProjectDO project, AgentDeviceDO device,
+                                                  String targetCommandId, String reason, String clientRequestId,
+                                                  Long userId) {
+        AgentCommandDO command = new AgentCommandDO();
+        command.setTenantId(session.getTenantId());
+        command.setCommandId(idFactory.commandId());
+        command.setSessionId(session.getId());
+        command.setDeviceId(device.getId());
+        command.setProjectId(project.getId());
+        command.setOwnerUserId(userId);
+        command.setCommandType(commandType(action).name());
+        command.setCommandStatus(AgentCommandDbStatus.CREATED.name());
+        command.setRequestId(clientRequestId);
+        command.setPayloadJson(writePayload(payload(action, targetCommandId, reason)));
+        command.setCreator(String.valueOf(userId));
+        command.setUpdater(String.valueOf(userId));
+        return command;
+    }
+
     private AgentCommandDO createCommand(AgentSessionDO session, AgentProjectDO project, AgentDeviceDO device,
                                          AgentSessionSendPromptReqVO reqVO, Long userId) {
         AgentCommandDO command = new AgentCommandDO();
@@ -255,6 +433,47 @@ public class AgentSessionServiceImpl implements AgentSessionService {
                 AgentType.valueOf(session.getAgentType()), CommandType.PROMPT,
                 new PromptCommandPayload(prompt, Map.of()), Instant.now(),
                 Instant.now().plus(properties.getCommandAckTimeout()), Map.of());
+    }
+
+    private AgentCommand toAgentCommand(AgentSessionControlDispatchContext context) {
+        return new AgentCommand(context.command().getCommandId(), context.command().getCommandId(),
+                context.session().getTenantId(), context.session().getOwnerUserId(),
+                context.device().getDeviceId(), context.project().getProjectId(), context.session().getSessionId(),
+                AgentType.valueOf(context.session().getAgentType()), commandType(context.action()),
+                payload(context.action(), context.targetCommandId(), context.reason()), Instant.now(),
+                Instant.now().plus(properties.getCommandAckTimeout()), Map.of());
+    }
+
+    private AgentCommandPayload payload(SessionControlAction action, String targetCommandId, String reason) {
+        return switch (action) {
+            case INTERRUPT -> new InterruptCommandPayload(targetCommandId, reason, Map.of());
+            case CANCEL -> new CancelCommandPayload(targetCommandId, reason, Map.of());
+            case CLOSE_SESSION -> new CloseSessionCommandPayload(targetCommandId, reason, Map.of());
+        };
+    }
+
+    private CommandType commandType(SessionControlAction action) {
+        return switch (action) {
+            case INTERRUPT -> CommandType.INTERRUPT;
+            case CANCEL -> CommandType.CANCEL;
+            case CLOSE_SESSION -> CommandType.CLOSE_SESSION;
+        };
+    }
+
+    private String sessionControlFailedCode(SessionControlAction action) {
+        return switch (action) {
+            case INTERRUPT -> "SESSION_INTERRUPT_FAILED";
+            case CANCEL -> "SESSION_CANCEL_FAILED";
+            case CLOSE_SESSION -> "SESSION_CLOSE_FAILED";
+        };
+    }
+
+    private com.wangbin.ai.framework.common.exception.ErrorCode sessionControlErrorCode(SessionControlAction action) {
+        return switch (action) {
+            case INTERRUPT -> SESSION_INTERRUPT_FAILED;
+            case CANCEL -> SESSION_CANCEL_FAILED;
+            case CLOSE_SESSION -> SESSION_CLOSE_FAILED;
+        };
     }
 
     private String writePayload(Object payload) {
@@ -393,6 +612,18 @@ public class AgentSessionServiceImpl implements AgentSessionService {
         respVO.setNativeItemId(message.getNativeItemId());
         respVO.setCreateSource(message.getCreateSource());
         respVO.setCreateTime(message.getCreateTime());
+        return respVO;
+    }
+
+    private AgentSessionControlRespVO toControlRespVO(AgentCommandDO command, AgentSessionDO session,
+                                                      SessionControlAction action, String targetCommandId) {
+        AgentSessionControlRespVO respVO = new AgentSessionControlRespVO();
+        respVO.setControlCommandId(command.getCommandId());
+        respVO.setSessionId(session.getSessionId());
+        respVO.setTargetCommandId(targetCommandId);
+        respVO.setAction(action);
+        respVO.setCommandStatus(command.getCommandStatus());
+        respVO.setSessionStatus(session.getSessionStatus());
         return respVO;
     }
 }

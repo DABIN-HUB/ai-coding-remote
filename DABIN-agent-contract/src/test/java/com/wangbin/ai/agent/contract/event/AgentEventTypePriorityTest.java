@@ -14,6 +14,7 @@ class AgentEventTypePriorityTest {
         assertThat(AgentEventType.PERMISSION_RESOLVED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.TASK_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.ERROR.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
+        assertThat(AgentEventType.SESSION_INTERRUPTED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.SESSION_COMPLETED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
         assertThat(AgentEventType.CHANGE_SET_FINALIZED.defaultPriority()).isEqualTo(EventPriority.CRITICAL);
     }

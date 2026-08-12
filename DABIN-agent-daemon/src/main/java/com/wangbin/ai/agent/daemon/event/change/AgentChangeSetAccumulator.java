@@ -65,6 +65,9 @@ public class AgentChangeSetAccumulator {
         if (event.type() == AgentEventType.SESSION_IDLE || event.type() == AgentEventType.SESSION_COMPLETED) {
             return finalizeBefore(event, commandId, ChangeSetStatus.COMPLETED);
         }
+        if (event.type() == AgentEventType.SESSION_INTERRUPTED) {
+            return finalizeBefore(event, commandId, ChangeSetStatus.INTERRUPTED);
+        }
         if (event.type() == AgentEventType.ERROR && event.payload() instanceof AgentErrorPayload payload) {
             if (payload.retryable()) {
                 return List.of(event);

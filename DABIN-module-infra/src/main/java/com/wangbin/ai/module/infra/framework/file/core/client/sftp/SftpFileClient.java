@@ -88,6 +88,11 @@ public class SftpFileClient extends AbstractFileClient<SftpFileClientConfig> {
     }
 
     @Override
+    public boolean supportsStreamingUpload() {
+        return true;
+    }
+
+    @Override
     public void delete(String path) {
         String filePath = getFilePath(path);
         reconnectIfTimeout();
@@ -114,6 +119,11 @@ public class SftpFileClient extends AbstractFileClient<SftpFileClientConfig> {
         } finally {
             FileUtil.del(destFile);
         }
+    }
+
+    @Override
+    public boolean supportsStreamingDownload() {
+        return true;
     }
 
     private String getFilePath(String path) {

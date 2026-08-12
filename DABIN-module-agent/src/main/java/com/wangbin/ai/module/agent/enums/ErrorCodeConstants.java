@@ -65,4 +65,12 @@ public interface ErrorCodeConstants {
     ErrorCode ARTIFACT_FILE_STORE_FAILED = new ErrorCode(1_020_000_059, "Artifact file store failed");
     ErrorCode ARTIFACT_NOT_READY = new ErrorCode(1_020_000_060, "Artifact is not ready");
     ErrorCode ARTIFACT_EXPIRED = new ErrorCode(1_020_000_061, "Artifact has expired");
+    ErrorCode ARTIFACT_NON_STREAMING_SIZE_EXCEEDED = new ErrorCode(1_020_000_062,
+            "Artifact exceeds non-streaming file provider size limit");
+    ErrorCode SESSION_CONTROL_NOT_ALLOWED = new ErrorCode(1_020_000_063, "Session control is not allowed");
+    ErrorCode SESSION_CONTROL_TARGET_NOT_ACTIVE = new ErrorCode(1_020_000_064,
+            "Session control target command is not active");
+    ErrorCode SESSION_INTERRUPT_FAILED = new ErrorCode(1_020_000_065, "Session interrupt dispatch failed");
+    ErrorCode SESSION_CANCEL_FAILED = new ErrorCode(1_020_000_066, "Session cancel dispatch failed");
+    ErrorCode SESSION_CLOSE_FAILED = new ErrorCode(1_020_000_067, "Session close dispatch failed");
 }

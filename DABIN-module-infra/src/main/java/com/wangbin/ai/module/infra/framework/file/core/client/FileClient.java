@@ -43,6 +43,14 @@ public interface FileClient {
     }
 
     /**
+     * Whether this client can upload from an {@link InputStream} without buffering the full file in heap memory.
+     * Default is conservative because the compatibility implementation reads the whole stream into {@code byte[]}.
+     */
+    default boolean supportsStreamingUpload() {
+        return false;
+    }
+
+    /**
      * 删除文件
      *
      * @param path 相对路径
@@ -69,6 +77,14 @@ public interface FileClient {
         if (content != null) {
             IoUtil.write(outputStream, false, content);
         }
+    }
+
+    /**
+     * Whether this client can write content to an {@link OutputStream} without loading the full object into heap memory.
+     * Default is conservative because the compatibility implementation delegates to {@link #getContent(String)}.
+     */
+    default boolean supportsStreamingDownload() {
+        return false;
     }
 
     // ========== 文件签名，目前仅 S3 支持 ==========

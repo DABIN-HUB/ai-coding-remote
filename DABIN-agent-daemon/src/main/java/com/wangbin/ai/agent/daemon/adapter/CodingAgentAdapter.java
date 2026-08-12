@@ -21,10 +21,17 @@ public interface CodingAgentAdapter {
 
     void interrupt(String sessionId);
 
+    default void cancelPendingPermissions(String sessionId) {
+    }
+
     void resolvePermission(String sessionId, String permissionId, PermissionDecision decision, String decisionCommandId);
 
     Flux<AgentEvent> events(String sessionId);
 
     void closeSession(String sessionId);
+
+    default void closeSession(String sessionId, String controlCommandId) {
+        closeSession(sessionId);
+    }
 
 }

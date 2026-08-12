@@ -1,9 +1,11 @@
 package com.wangbin.ai.agent.daemon.adapter.codex;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.wangbin.ai.agent.contract.enums.FileChangeType;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentSessionStatus;
+import com.wangbin.ai.agent.contract.enums.FileChangeType;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
+import com.wangbin.ai.agent.contract.enums.SessionInterruptInitiator;
 import com.wangbin.ai.agent.contract.event.*;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessage;
 import com.wangbin.ai.agent.daemon.adapter.codex.model.CodexRpcMessageKind;
@@ -128,7 +130,10 @@ public class CodexEventMapper {
             return List.of(errorEvent(context, CodexErrorExtractor.fromFailedTurn(turn), extensions));
         }
         if (CodexProtocolConstants.TURN_STATUS_INTERRUPTED.equals(status)) {
-            return List.of(errorEvent(context, CodexErrorExtractor.interruptedTurn(), extensions));
+            return List.of(event(context, AgentEventType.SESSION_INTERRUPTED,
+                    new SessionInterruptedPayload(context.nativeSessionId(), context.activePlatformCommandId(), null,
+                            SessionControlAction.INTERRUPT, SessionInterruptInitiator.SYSTEM,
+                            "native turn interrupted", extensions)));
         }
         return List.of(event(context, AgentEventType.SESSION_STATE_CHANGED,
                 new SessionPayload(context.nativeSessionId(), AgentSessionStatus.RUNNING, null, extensions)));

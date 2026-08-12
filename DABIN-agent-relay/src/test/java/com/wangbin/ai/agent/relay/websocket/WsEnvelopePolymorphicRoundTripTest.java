@@ -6,6 +6,9 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.wangbin.ai.agent.contract.command.AgentCommand;
 import com.wangbin.ai.agent.contract.command.ArtifactFetchCommandPayload;
+import com.wangbin.ai.agent.contract.command.CancelCommandPayload;
+import com.wangbin.ai.agent.contract.command.CloseSessionCommandPayload;
+import com.wangbin.ai.agent.contract.command.InterruptCommandPayload;
 import com.wangbin.ai.agent.contract.command.PromptCommandPayload;
 import com.wangbin.ai.agent.contract.enums.AgentEventType;
 import com.wangbin.ai.agent.contract.enums.AgentType;
@@ -13,12 +16,15 @@ import com.wangbin.ai.agent.contract.enums.ArtifactSourceType;
 import com.wangbin.ai.agent.contract.enums.ChangeSetStatus;
 import com.wangbin.ai.agent.contract.enums.CommandType;
 import com.wangbin.ai.agent.contract.enums.FileChangeType;
+import com.wangbin.ai.agent.contract.enums.SessionControlAction;
+import com.wangbin.ai.agent.contract.enums.SessionInterruptInitiator;
 import com.wangbin.ai.agent.contract.event.AgentEvent;
 import com.wangbin.ai.agent.contract.event.AgentMessagePayload;
 import com.wangbin.ai.agent.contract.event.ChangeSetFinalizedPayload;
 import com.wangbin.ai.agent.contract.event.ChangedFileSummary;
 import com.wangbin.ai.agent.contract.event.DiffUpdatedPayload;
 import com.wangbin.ai.agent.contract.event.FileChangedPayload;
+import com.wangbin.ai.agent.contract.event.SessionInterruptedPayload;
 import com.wangbin.ai.agent.contract.websocket.WsEnvelope;
 import com.wangbin.ai.agent.contract.websocket.WsMessageType;
 import org.junit.jupiter.api.Test;
@@ -77,6 +83,23 @@ class WsEnvelopePolymorphicRoundTripTest {
     }
 
     @Test
+    void sessionControlCommandPayloadsRoundTripInsideWsEnvelope() throws Exception {
+        AgentCommand interrupt = controlCommand(CommandType.INTERRUPT,
+                new InterruptCommandPayload(TEST_COMMAND_ID, "pause", Map.of()));
+        AgentCommand cancel = controlCommand(CommandType.CANCEL,
+                new CancelCommandPayload(TEST_COMMAND_ID, "cancel", Map.of()));
+        AgentCommand close = controlCommand(CommandType.CLOSE_SESSION,
+                new CloseSessionCommandPayload(TEST_COMMAND_ID, "close", Map.of()));
+
+        assertThat(decode(WsEnvelope.of(WsMessageType.AGENT_COMMAND, interrupt), AgentCommand.class)
+                .payload().payload()).isInstanceOf(InterruptCommandPayload.class);
+        assertThat(decode(WsEnvelope.of(WsMessageType.AGENT_COMMAND, cancel), AgentCommand.class)
+                .payload().payload()).isInstanceOf(CancelCommandPayload.class);
+        assertThat(decode(WsEnvelope.of(WsMessageType.AGENT_COMMAND, close), AgentCommand.class)
+                .payload().payload()).isInstanceOf(CloseSessionCommandPayload.class);
+    }
+
+    @Test
     void agentEventMessagePayloadRoundTripsInsideWsEnvelope() throws Exception {
         AgentEvent event = AgentEvent.of("trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID,
                 TEST_SESSION_ID, 1L, AgentType.CODEX, AgentEventType.AGENT_MESSAGE,
@@ -117,9 +140,31 @@ class WsEnvelopePolymorphicRoundTripTest {
         assertThat(decoded.status()).isEqualTo(ChangeSetStatus.COMPLETED);
     }
 
+    @Test
+    void sessionInterruptedPayloadRoundTripsInsideWsEnvelope() throws Exception {
+        AgentEvent event = AgentEvent.of("trace-1", TEST_TENANT_ID, TEST_USER_ID, TEST_DEVICE_ID, TEST_PROJECT_ID,
+                TEST_SESSION_ID, 4L, AgentType.CODEX, AgentEventType.SESSION_INTERRUPTED,
+                new SessionInterruptedPayload("native-1", TEST_COMMAND_ID, "cmd-cancel-1",
+                        SessionControlAction.CANCEL, SessionInterruptInitiator.USER, "cancel", Map.of()));
+
+        WsEnvelope<AgentEvent> decoded = decode(WsEnvelope.of(WsMessageType.AGENT_EVENT, event), AgentEvent.class);
+
+        assertThat(decoded.payload().type()).isEqualTo(AgentEventType.SESSION_INTERRUPTED);
+        SessionInterruptedPayload payload = (SessionInterruptedPayload) decoded.payload().payload();
+        assertThat(payload.action()).isEqualTo(SessionControlAction.CANCEL);
+        assertThat(payload.targetCommandId()).isEqualTo(TEST_COMMAND_ID);
+        assertThat(payload.controlCommandId()).isEqualTo("cmd-cancel-1");
+    }
+
     private <T> WsEnvelope<T> decode(WsEnvelope<T> envelope, Class<T> payloadType) throws Exception {
         String json = objectMapper.writeValueAsString(envelope);
         JavaType type = objectMapper.getTypeFactory().constructParametricType(WsEnvelope.class, payloadType);
         return objectMapper.readValue(json, type);
+    }
+
+    private AgentCommand controlCommand(CommandType type, com.wangbin.ai.agent.contract.command.AgentCommandPayload payload) {
+        return new AgentCommand("cmd-control-" + type.name(), "trace-1", TEST_TENANT_ID, TEST_USER_ID,
+                TEST_DEVICE_ID, TEST_PROJECT_ID, TEST_SESSION_ID, AgentType.CODEX, type, payload,
+                Instant.now(), null, Map.of());
     }
 }

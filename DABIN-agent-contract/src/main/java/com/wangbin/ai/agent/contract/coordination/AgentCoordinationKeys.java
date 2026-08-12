@@ -19,9 +19,11 @@ public final class AgentCoordinationKeys {
     private static final String RELAY_NODE_PREFIX = "agent:relay:node:";
     private static final String PAIRING_LOCK_PREFIX = "agent:lock:pair:";
     private static final String COMMAND_IDEMPOTENCY_LOCK_PREFIX = "agent:lock:command:";
+    private static final String SESSION_CONTROL_IDEMPOTENCY_LOCK_PREFIX = "agent:lock:session:control:";
     private static final String PERMISSION_DECISION_LOCK_PREFIX = "agent:lock:permission:";
     private static final String ARTIFACT_REQUEST_LOCK_PREFIX = "agent:lock:artifact:request:";
     private static final String ARTIFACT_UPLOAD_LOCK_PREFIX = "agent:lock:artifact:upload:";
+    private static final String ARTIFACT_CLEANUP_LOCK_PREFIX = "agent:lock:artifact:cleanup:";
     private static final String ARTIFACT_UPLOAD_TICKET_PREFIX = "agent:artifact:upload:";
     private static final String RELAY_COMMAND_CHANNEL_PREFIX = "agent:relay:command:";
     private static final String EVENT_INGRESS_STREAM = "agent:event:ingress";
@@ -67,6 +69,13 @@ public final class AgentCoordinationKeys {
                 + ":" + sha256UrlSafe(clientRequestId);
     }
 
+    public static String sessionControlIdempotencyLock(Long tenantId, Long userId, String action, String sessionId,
+                                                       String targetCommandId, String clientRequestId) {
+        return SESSION_CONTROL_IDEMPOTENCY_LOCK_PREFIX + tenantId + ":" + userId + ":" + action + ":"
+                + sha256UrlSafe(sessionId) + ":" + sha256UrlSafe(targetCommandId == null ? "" : targetCommandId)
+                + ":" + sha256UrlSafe(clientRequestId);
+    }
+
     public static String permissionDecisionLock(Long tenantId, String permissionId) {
         return PERMISSION_DECISION_LOCK_PREFIX + tenantId + ":" + sha256UrlSafe(permissionId);
     }
@@ -78,6 +87,10 @@ public final class AgentCoordinationKeys {
 
     public static String artifactUploadLock(Long tenantId, String artifactId) {
         return ARTIFACT_UPLOAD_LOCK_PREFIX + tenantId + ":" + sha256UrlSafe(artifactId);
+    }
+
+    public static String artifactCleanupLock(Long tenantId, String artifactId) {
+        return ARTIFACT_CLEANUP_LOCK_PREFIX + tenantId + ":" + sha256UrlSafe(artifactId);
     }
 
     public static String artifactUploadTicket(String rawTicket) {
