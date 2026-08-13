@@ -111,18 +111,72 @@ export const useAgentCodingStore = defineStore('agentCoding', {
         await this.selectDevice(this.devices[0])
       }
     },
-    async refreshDevices() {
+    async fetchDeviceSnapshot() {
       const page = await AgentApi.getDevicePage({ pageNo: 1, pageSize: PAGE_SIZE })
-      this.devices = page.list || []
+      return page.list || []
+    },
+    applyDeviceSnapshot(devices: AgentDevice[]) {
+      this.devices = devices
+      if (devices.length === 0) {
+        const hasDeviceScopedState = Boolean(
+          this.currentDevice ||
+            this.projects.length > 0 ||
+            this.currentProject ||
+            this.currentSession ||
+            this.activeCommandId ||
+            this.controlPending ||
+            this.controlTimeoutMessage ||
+            this.messages.length > 0 ||
+            this.pendingPermission ||
+            this.latestChangeSet ||
+            this.diffText ||
+            Object.keys(this.artifacts).length > 0
+        )
+        if (hasDeviceScopedState) {
+          this.currentDevice = undefined
+          this.clearDeviceContext()
+        }
+        return this.devices
+      }
+      const currentDeviceId = this.currentDevice?.id
+      if (currentDeviceId === undefined && (this.projects.length > 0 || this.currentProject || this.currentSession)) {
+        this.clearDeviceContext()
+        return this.devices
+      }
+      if (currentDeviceId !== undefined && !devices.some((device) => device.id === currentDeviceId)) {
+        this.currentDevice = undefined
+        this.clearDeviceContext()
+      }
       return this.devices
     },
-    async refreshDevicesAndSelectNew(previousDeviceIds: Set<number>) {
-      const devices = await this.refreshDevices()
-      const newDevice = devices.find((device) => !previousDeviceIds.has(device.id))
-      if (newDevice) {
-        await this.selectDevice(newDevice)
+    async refreshDevices() {
+      const devices = await this.fetchDeviceSnapshot()
+      return this.applyDeviceSnapshot(devices)
+    },
+    async selectDeviceIf(device: AgentDevice, shouldContinue: () => boolean) {
+      if (!shouldContinue()) {
+        return false
       }
-      return newDevice
+      const selectedDeviceId = device.id
+      const page = await AgentApi.getProjectPage({ pageNo: 1, pageSize: PAGE_SIZE, deviceDbId: selectedDeviceId })
+      if (!shouldContinue()) {
+        return false
+      }
+      const deviceChanged = this.currentDevice?.id !== selectedDeviceId
+      const previousProjectId = this.currentProject?.id
+      if (deviceChanged) {
+        this.clearDeviceContext()
+      }
+      this.currentDevice = device
+      this.projects = page.list || []
+      const nextProject = deviceChanged
+        ? this.projects[0]
+        : this.projects.find((project) => project.id === previousProjectId) || this.projects[0]
+      if (this.currentProject?.id !== nextProject?.id) {
+        this.clearSessionContext()
+      }
+      this.currentProject = nextProject
+      return true
     },
     async selectDevice(device: AgentDevice) {
       const deviceChanged = this.currentDevice?.id !== device.id

@@ -35,8 +35,8 @@
       <section class="agent-coding__workspace">
         <div class="agent-coding__workspace-head">
           <div>
-            <h2>{{ store.currentProject?.projectName || '请选择项目' }}</h2>
-            <p>{{ store.currentProject?.workspacePath || '选择在线设备和项目后开始 Session' }}</p>
+            <h2>{{ workspaceTitle }}</h2>
+            <p>{{ workspaceDescription }}</p>
           </div>
           <div class="agent-coding__actions">
             <el-tag :type="sessionTagType">{{ sessionStatusText }}</el-tag>
@@ -203,6 +203,21 @@ const sessionTagType = computed(() => {
   if (status === 'FAILED') return 'danger'
   return 'info'
 })
+const workspaceTitle = computed(() => {
+  if (store.currentProject?.projectName) {
+    return store.currentProject.projectName
+  }
+  return store.currentDevice ? '请选择项目' : '连接开发机后开始远程编码'
+})
+const workspaceDescription = computed(() => {
+  if (store.currentProject?.workspacePath) {
+    return store.currentProject.workspacePath
+  }
+  if (!store.currentDevice) {
+    return '添加开发机并完成配对后开始 Session'
+  }
+  return '当前开发机还没有注册项目'
+})
 const pairingCommand = computed(() =>
   pairingCode.value
     ? `java -jar DABIN-agent-daemon/target/DABIN-agent-daemon.jar --mode=pair --pairingCode=${pairingCode.value.pairingCode}`
@@ -319,10 +334,15 @@ async function generatePairingCode() {
   pairingError.value = ''
   pairingRemainingText.value = ''
   pairingCode.value = undefined
-  const previousDeviceIds = new Set(store.devices.map((device) => device.id))
   try {
+    const baselineDevices = await store.fetchDeviceSnapshot()
+    if (!isCurrentPairingGeneration(generation)) {
+      return
+    }
+    store.applyDeviceSnapshot(baselineDevices)
+    const previousDeviceIds = new Set(baselineDevices.map((device) => device.id))
     const code = await AgentApi.createPairingCode()
-    if (generation !== pairingGeneration) {
+    if (!isCurrentPairingGeneration(generation)) {
       return
     }
     pairingCode.value = code
@@ -361,7 +381,7 @@ function startPairingCountdown(expireAt: string, generation: number) {
 }
 
 function updatePairingRemaining(expireAt: string, generation: number) {
-  if (generation !== pairingGeneration || pairingStatus.value !== 'WAITING') {
+  if (!isWaitingPairingGeneration(generation)) {
     return false
   }
   const expiresAt = new Date(expireAt).getTime()
@@ -380,13 +400,26 @@ function updatePairingRemaining(expireAt: string, generation: number) {
 function startPairingPolling(previousDeviceIds: Set<number>, generation: number) {
   stopPairingPolling()
   pairingPollTimer = window.setInterval(async () => {
-    if (generation !== pairingGeneration || pairingStatus.value !== 'WAITING' || pairingPollInFlight) {
+    if (!isWaitingPairingGeneration(generation) || pairingPollInFlight) {
       return
     }
     pairingPollInFlight = true
     try {
-      const newDevice = await store.refreshDevicesAndSelectNew(previousDeviceIds)
-      if (generation !== pairingGeneration || !newDevice) {
+      const devices = await store.fetchDeviceSnapshot()
+      if (!isWaitingPairingGeneration(generation)) {
+        return
+      }
+      const newDevice = devices.find((device) => !previousDeviceIds.has(device.id))
+      store.applyDeviceSnapshot(devices)
+      if (!newDevice || !isWaitingPairingGeneration(generation)) {
+        return
+      }
+      const selectContextVersion = store.contextVersion
+      const selected = await store.selectDeviceIf(
+        newDevice,
+        () => isWaitingPairingGeneration(generation) && store.contextVersion === selectContextVersion
+      )
+      if (!selected || !isWaitingPairingGeneration(generation)) {
         return
       }
       pairingStatus.value = 'SUCCESS'
@@ -398,9 +431,14 @@ function startPairingPolling(previousDeviceIds: Set<number>, generation: number)
         }
       }, PAIRING_SUCCESS_CLOSE_DELAY)
     } catch (error) {
+      if (!isWaitingPairingGeneration(generation)) {
+        return
+      }
       pairingError.value = extractErrorMessage(error)
     } finally {
-      pairingPollInFlight = false
+      if (generation === pairingGeneration) {
+        pairingPollInFlight = false
+      }
     }
   }, PAIRING_POLL_INTERVAL)
 }
@@ -427,6 +465,14 @@ function stopPairingPolling() {
     pairingPollTimer = undefined
   }
   pairingPollInFlight = false
+}
+
+function isCurrentPairingGeneration(generation: number) {
+  return generation === pairingGeneration && pairingDialogVisible.value
+}
+
+function isWaitingPairingGeneration(generation: number) {
+  return isCurrentPairingGeneration(generation) && pairingStatus.value === 'WAITING'
 }
 
 function formatRemaining(milliseconds: number) {
@@ -494,7 +540,9 @@ const DeviceProjectPicker = defineComponent({
         ]),
         h('div', { class: 'picker__section' }, [
           h('div', { class: 'picker__title' }, '项目'),
-          store.projects.length === 0
+          !store.currentDevice
+            ? h('div', { class: 'picker-empty picker-empty--compact' }, '连接开发机后显示项目')
+            : store.projects.length === 0
             ? h('div', { class: 'picker-empty picker-empty--compact' }, '当前开发机还没有注册项目')
             : store.projects.map((project) =>
                 h(
