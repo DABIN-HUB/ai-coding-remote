@@ -12,12 +12,14 @@ import java.util.Base64;
 public final class AgentCoordinationKeys {
 
     private static final String PAIRING_PREFIX = "agent:pairing:";
+    private static final String ACTIVE_PAIRING_PREFIX = "agent:pairing:active:";
     private static final String RELAY_TICKET_PREFIX = "agent:relay:ticket:";
     private static final String DEVICE_PRESENCE_PREFIX = "agent:presence:device:";
     private static final String DEVICE_ROUTE_PREFIX = "agent:route:device:";
     private static final String USER_ROUTE_PREFIX = "agent:route:user:";
     private static final String RELAY_NODE_PREFIX = "agent:relay:node:";
     private static final String PAIRING_LOCK_PREFIX = "agent:lock:pair:";
+    private static final String PAIRING_CREATE_LOCK_PREFIX = "agent:lock:pair:create:";
     private static final String COMMAND_IDEMPOTENCY_LOCK_PREFIX = "agent:lock:command:";
     private static final String SESSION_CONTROL_IDEMPOTENCY_LOCK_PREFIX = "agent:lock:session:control:";
     private static final String PERMISSION_DECISION_LOCK_PREFIX = "agent:lock:permission:";
@@ -38,6 +40,10 @@ public final class AgentCoordinationKeys {
 
     public static String pairing(String code) {
         return PAIRING_PREFIX + code;
+    }
+
+    public static String activePairing(Long tenantId, Long userId) {
+        return ACTIVE_PAIRING_PREFIX + tenantId + ":" + userId;
     }
 
     public static String relayTicket(String ticket) {
@@ -62,6 +68,10 @@ public final class AgentCoordinationKeys {
 
     public static String pairingLock(Long tenantId, Long userId, String installationId) {
         return PAIRING_LOCK_PREFIX + tenantId + ":" + userId + ":" + sha256UrlSafe(installationId);
+    }
+
+    public static String pairingCreateLock(Long tenantId, Long userId) {
+        return PAIRING_CREATE_LOCK_PREFIX + tenantId + ":" + userId;
     }
 
     public static String commandIdempotencyLock(Long tenantId, Long userId, String sessionId, String clientRequestId) {

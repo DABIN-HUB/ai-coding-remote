@@ -85,6 +85,11 @@ export interface RelayTicket {
   expireAt: string
 }
 
+export interface AgentPairingCode {
+  pairingCode: string
+  expireAt: string
+}
+
 export interface PermissionRequest {
   id: number
   permissionId: string

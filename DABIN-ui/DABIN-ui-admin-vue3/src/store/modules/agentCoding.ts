@@ -81,8 +81,8 @@ export const useAgentCodingStore = defineStore('agentCoding', {
     canStop(state): boolean {
       return Boolean(
         state.currentSession &&
-          state.activeCommandId &&
-          ['RUNNING', 'WAITING_PERMISSION'].includes(state.currentSession.sessionStatus || '')
+        state.activeCommandId &&
+        ['RUNNING', 'WAITING_PERMISSION'].includes(state.currentSession.sessionStatus || '')
       )
     }
   },
@@ -106,11 +106,23 @@ export const useAgentCodingStore = defineStore('agentCoding', {
       agentRealtimeClient.disconnect()
     },
     async loadDevices() {
-      const page = await AgentApi.getDevicePage({ pageNo: 1, pageSize: PAGE_SIZE })
-      this.devices = page.list || []
+      await this.refreshDevices()
       if (!this.currentDevice && this.devices.length > 0) {
         await this.selectDevice(this.devices[0])
       }
+    },
+    async refreshDevices() {
+      const page = await AgentApi.getDevicePage({ pageNo: 1, pageSize: PAGE_SIZE })
+      this.devices = page.list || []
+      return this.devices
+    },
+    async refreshDevicesAndSelectNew(previousDeviceIds: Set<number>) {
+      const devices = await this.refreshDevices()
+      const newDevice = devices.find((device) => !previousDeviceIds.has(device.id))
+      if (newDevice) {
+        await this.selectDevice(newDevice)
+      }
+      return newDevice
     },
     async selectDevice(device: AgentDevice) {
       const deviceChanged = this.currentDevice?.id !== device.id

@@ -3,6 +3,7 @@ import type {
   AgentCommand,
   AgentDevice,
   AgentMessage,
+  AgentPairingCode,
   AgentProject,
   AgentSession,
   AgentSessionControlResp,
@@ -19,6 +20,10 @@ export const getDevicePage = (params: Record<string, unknown>) => {
   return request.get<PageResult<AgentDevice>>({ url: '/agent/device/page', params })
 }
 
+export const createPairingCode = () => {
+  return request.post<AgentPairingCode>({ url: '/agent/device/createPairingCode' })
+}
+
 export const getProjectPage = (params: Record<string, unknown>) => {
   return request.get<PageResult<AgentProject>>({ url: '/agent/project/page', params })
 }
@@ -31,7 +36,11 @@ export const getSession = (sessionId: string) => {
   return request.get<AgentSession>({ url: '/agent/session/get', params: { sessionId } })
 }
 
-export const sendPrompt = (data: { sessionId: string; content: string; clientRequestId: string }) => {
+export const sendPrompt = (data: {
+  sessionId: string
+  content: string
+  clientRequestId: string
+}) => {
   return request.post<AgentCommand>({ url: '/agent/session/sendPrompt', data })
 }
 
