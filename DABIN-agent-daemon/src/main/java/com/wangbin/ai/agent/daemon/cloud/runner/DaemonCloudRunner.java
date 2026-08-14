@@ -5,12 +5,14 @@ import com.wangbin.ai.agent.daemon.cloud.controlplane.PairDeviceRequest;
 import com.wangbin.ai.agent.daemon.cloud.controlplane.PairDeviceResponse;
 import com.wangbin.ai.agent.daemon.cloud.relay.RelayWebSocketClient;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
+import com.wangbin.ai.agent.daemon.project.LocalProjectSetupService;
 import com.wangbin.ai.agent.daemon.state.DaemonStateStore;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationListener;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -24,18 +26,23 @@ import java.util.List;
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
-public class DaemonCloudRunner implements ApplicationRunner {
+public class DaemonCloudRunner implements ApplicationListener<ApplicationReadyEvent> {
 
     private static final Logger log = LoggerFactory.getLogger(DaemonCloudRunner.class);
     private static final String OPTION_MODE = "mode";
+    private static final String OPTION_PAIRING_CODE = "pairingCode";
     private static final String MODE_PAIR = "pair";
     private static final String MODE_RUN = "run";
+    private static final String MODE_ADD_PROJECT = "add-project";
+    private static final String MODE_LIST_PROJECTS = "list-projects";
+    private static final String MODE_REMOVE_PROJECT = "remove-project";
 
     private final AgentDaemonProperties properties;
     private final DaemonStateStore stateStore;
     private final ControlPlaneClient controlPlaneClient;
     private final RelayWebSocketClient relayWebSocketClient;
     private final DaemonProjectRuntimeBootstrap projectRuntimeBootstrap;
+    private final LocalProjectSetupService projectSetupService;
     private final DaemonRunLifecycle runLifecycle;
 
     public DaemonCloudRunner(AgentDaemonProperties properties,
@@ -43,29 +50,51 @@ public class DaemonCloudRunner implements ApplicationRunner {
                              ControlPlaneClient controlPlaneClient,
                              RelayWebSocketClient relayWebSocketClient,
                              DaemonProjectRuntimeBootstrap projectRuntimeBootstrap,
+                             LocalProjectSetupService projectSetupService,
                              DaemonRunLifecycle runLifecycle) {
         this.properties = properties;
         this.stateStore = stateStore;
         this.controlPlaneClient = controlPlaneClient;
         this.relayWebSocketClient = relayWebSocketClient;
         this.projectRuntimeBootstrap = projectRuntimeBootstrap;
+        this.projectSetupService = projectSetupService;
         this.runLifecycle = runLifecycle;
     }
 
     @Override
-    public void run(ApplicationArguments args) {
-        String mode = option(args, OPTION_MODE, "");
-        if (MODE_PAIR.equalsIgnoreCase(mode)) {
-            pair(args);
-            return;
-        }
-        if (MODE_RUN.equalsIgnoreCase(mode)) {
-            runCloudTransport();
-        }
+    public void onApplicationEvent(ApplicationReadyEvent event) {
+        run(event.getApplicationContext().getBean(ApplicationArguments.class));
     }
 
-    private void pair(ApplicationArguments args) {
-        String pairingCode = requiredOption(args, "pairingCode");
+    public void run(ApplicationArguments args) {
+        String mode = option(args, OPTION_MODE, "");
+        String command = localProjectCommand(args);
+        if (command != null) {
+            mode = command;
+        }
+        if (MODE_LIST_PROJECTS.equalsIgnoreCase(mode)) {
+            projectSetupService.listProjects();
+            return;
+        }
+        if (MODE_REMOVE_PROJECT.equalsIgnoreCase(mode)) {
+            projectSetupService.removeProjects(args);
+            return;
+        }
+        if (MODE_ADD_PROJECT.equalsIgnoreCase(mode)) {
+            projectSetupService.configureProjects(args, false);
+            return;
+        }
+        if (args.containsOption(OPTION_PAIRING_CODE) || MODE_PAIR.equalsIgnoreCase(mode)) {
+            DeviceCredentialState credential = pair(args);
+            startCloud(args, credential, true);
+            return;
+        }
+        stateStore.loadCredential().ifPresentOrElse(credential -> startCloud(args, credential, false),
+                () -> log.warn("daemon has no device credential; run with --pairingCode=<code> first"));
+    }
+
+    private DeviceCredentialState pair(ApplicationArguments args) {
+        String pairingCode = requiredOption(args, OPTION_PAIRING_CODE);
         String controlPlaneUrl = option(args, "controlPlaneUrl", properties.getCloud().getControlPlaneUrl());
         String relayUrl = option(args, "relayUrl", properties.getCloud().getRelayUrl());
         String installationId = stateStore.getOrCreateInstallationId();
@@ -80,15 +109,14 @@ public class DaemonCloudRunner implements ApplicationRunner {
         stateStore.saveCredential(credential);
         log.info("daemon paired successfully: tenantId={}, deviceId={}, credentialId={}",
                 response.tenantId(), response.deviceId(), response.credentialId());
+        return credential;
     }
 
-    private void runCloudTransport() {
-        stateStore.loadCredential().ifPresentOrElse(credential -> {
-                    projectRuntimeBootstrap.bootstrap(credential);
-                    relayWebSocketClient.start(credential);
-                    runLifecycle.awaitStop();
-                },
-                () -> log.warn("daemon has no device credential; run --mode=pair --pairingCode=<code> first"));
+    private void startCloud(ApplicationArguments args, DeviceCredentialState credential, boolean promptIfEmpty) {
+        projectSetupService.configureProjects(args, promptIfEmpty);
+        projectRuntimeBootstrap.bootstrap(credential);
+        relayWebSocketClient.start(credential);
+        runLifecycle.start();
     }
 
     private String requiredOption(ApplicationArguments args, String name) {
@@ -102,6 +130,23 @@ public class DaemonCloudRunner implements ApplicationRunner {
     private String option(ApplicationArguments args, String name, String defaultValue) {
         List<String> values = args.getOptionValues(name);
         return values == null || values.isEmpty() ? defaultValue : values.getFirst();
+    }
+
+    private String localProjectCommand(ApplicationArguments args) {
+        List<String> nonOptionArgs = args.getNonOptionArgs();
+        if (nonOptionArgs.size() >= 2 && "project".equalsIgnoreCase(nonOptionArgs.get(0))) {
+            String action = nonOptionArgs.get(1);
+            if ("add".equalsIgnoreCase(action)) {
+                return MODE_ADD_PROJECT;
+            }
+            if ("list".equalsIgnoreCase(action)) {
+                return MODE_LIST_PROJECTS;
+            }
+            if ("remove".equalsIgnoreCase(action)) {
+                return MODE_REMOVE_PROJECT;
+            }
+        }
+        return null;
     }
 
     private String defaultDeviceName() {

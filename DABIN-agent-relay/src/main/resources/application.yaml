@@ -2,6 +2,13 @@ spring:
   application:
     name: DABIN-agent-relay
 
+  data:
+    redis:
+      host: ${DABIN_REDIS_HOST:127.0.0.1} # 地址
+      port: ${DABIN_REDIS_PORT:6379} # 端口
+      database: ${DABIN_REDIS_DATABASE:10} # 数据库索引
+
+
 server:
   port: 48180
 

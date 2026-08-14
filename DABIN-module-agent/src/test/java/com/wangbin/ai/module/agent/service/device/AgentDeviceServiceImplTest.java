@@ -3,14 +3,19 @@ package com.wangbin.ai.module.agent.service.device;
 import com.wangbin.ai.agent.contract.coordination.PairingCodePayload;
 import com.wangbin.ai.agent.contract.coordination.RelayTicketPayload;
 import com.wangbin.ai.agent.contract.coordination.RelaySubjectType;
+import com.wangbin.ai.agent.contract.runtime.AgentRuntimeTypes;
 import com.wangbin.ai.module.agent.controller.admin.device.vo.AgentDevicePairReqVO;
 import com.wangbin.ai.module.agent.controller.admin.device.vo.AgentDevicePairRespVO;
+import com.wangbin.ai.module.agent.controller.admin.device.vo.AgentDeviceRespVO;
 import com.wangbin.ai.module.agent.dal.dataobject.device.AgentDeviceCredentialDO;
 import com.wangbin.ai.module.agent.dal.dataobject.device.AgentDeviceDO;
+import com.wangbin.ai.module.agent.dal.dataobject.runtime.AgentRuntimeDO;
 import com.wangbin.ai.module.agent.dal.mysql.device.AgentDeviceCredentialMapper;
 import com.wangbin.ai.module.agent.dal.mysql.device.AgentDeviceMapper;
+import com.wangbin.ai.module.agent.dal.mysql.runtime.AgentRuntimeMapper;
 import com.wangbin.ai.module.agent.enums.CredentialStatus;
 import com.wangbin.ai.module.agent.enums.DeviceStatus;
+import com.wangbin.ai.module.agent.enums.RuntimeStatus;
 import com.wangbin.ai.module.agent.framework.config.AgentControlPlaneProperties;
 import com.wangbin.ai.module.agent.service.pairing.PairingCodeService;
 import com.wangbin.ai.module.agent.service.relay.RelayTicketService;
@@ -67,6 +72,7 @@ class AgentDeviceServiceImplTest {
 
     private final AgentDeviceMapper deviceMapper = mock(AgentDeviceMapper.class);
     private final AgentDeviceCredentialMapper credentialMapper = mock(AgentDeviceCredentialMapper.class);
+    private final AgentRuntimeMapper runtimeMapper = mock(AgentRuntimeMapper.class);
     private final PairingCodeService pairingCodeService = mock(PairingCodeService.class);
     private final RelayTicketService relayTicketService = mock(RelayTicketService.class);
     private final DevicePresenceService presenceService = mock(DevicePresenceService.class);
@@ -79,7 +85,7 @@ class AgentDeviceServiceImplTest {
 
     @BeforeEach
     void setUp() throws InterruptedException {
-        service = new AgentDeviceServiceImpl(deviceMapper, credentialMapper, pairingCodeService, relayTicketService,
+        service = new AgentDeviceServiceImpl(deviceMapper, credentialMapper, runtimeMapper, pairingCodeService, relayTicketService,
                 presenceService, passwordEncoder, redissonClient, properties,
                 new RecordingTransactionTemplate(events));
         when(passwordEncoder.encode(any())).thenReturn("encoded-secret");
@@ -221,7 +227,7 @@ class AgentDeviceServiceImplTest {
         AtomicReference<AgentDeviceDO> committedDevice = new AtomicReference<>();
         ThreadLocal<AgentDeviceDO> pendingDevice = new ThreadLocal<>();
         List<AgentDeviceCredentialDO> credentials = Collections.synchronizedList(new ArrayList<>());
-        service = new AgentDeviceServiceImpl(deviceMapper, credentialMapper, pairingCodeService, relayTicketService,
+        service = new AgentDeviceServiceImpl(deviceMapper, credentialMapper, runtimeMapper, pairingCodeService, relayTicketService,
                 presenceService, passwordEncoder, redissonClient, properties,
                 new RecordingTransactionTemplate(events, () -> {
                     AgentDeviceDO pending = pendingDevice.get();
@@ -296,6 +302,25 @@ class AgentDeviceServiceImplTest {
         assertThat(response.getTicket()).isEqualTo(TEST_RELAY_TICKET);
         assertThat(credential.getLastUsedTime()).isBeforeOrEqualTo(LocalDateTime.now());
         verify(credentialMapper).updateById(credential);
+    }
+
+    @Test
+    void getDeviceShouldExposePresenceAndRuntimeReadinessSeparately() {
+        AgentDeviceDO device = existingDevice();
+        when(deviceMapper.selectById(TEST_DEVICE_DB_ID)).thenReturn(device);
+        when(presenceService.getPresence(EXISTING_DEVICE_ID)).thenReturn(
+                new com.wangbin.ai.agent.contract.coordination.DevicePresencePayload("relay-1", "conn-1",
+                        TEST_TENANT_ID, TEST_USER_ID, EXISTING_DEVICE_ID, Instant.now()));
+        AgentRuntimeDO runtime = new AgentRuntimeDO();
+        runtime.setRuntimeStatus(RuntimeStatus.AVAILABLE.name());
+        when(runtimeMapper.selectByDeviceAndType(TEST_DEVICE_DB_ID, AgentRuntimeTypes.CODEX_APP_SERVER))
+                .thenReturn(runtime);
+
+        AgentDeviceRespVO response = service.getDevice(TEST_DEVICE_DB_ID, TEST_USER_ID);
+
+        assertThat(response.getOnline()).isTrue();
+        assertThat(response.getRuntimeStatus()).isEqualTo(RuntimeStatus.AVAILABLE.name());
+        assertThat(response.getRuntimeAvailable()).isTrue();
     }
 
     private PairingCodePayload pairingPayload() {

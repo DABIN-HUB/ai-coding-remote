@@ -38,6 +38,10 @@ public class AgentDeviceRespVO {
     private Instant lastSeenAt;
     @Schema(description = "当前 Relay 节点编号，诊断字段")
     private String relayNodeId;
+    @Schema(description = "Codex Runtime 状态，AVAILABLE=可用，UNAVAILABLE=不可用，DISABLED=禁用")
+    private String runtimeStatus;
+    @Schema(description = "Codex Runtime 当前是否可用，来自最近一次 Daemon runtime report")
+    private Boolean runtimeAvailable;
     @Schema(description = "备注")
     private String remark;
     @Schema(description = "创建时间")

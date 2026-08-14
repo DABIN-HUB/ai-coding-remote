@@ -271,8 +271,9 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
         if (socketToAbort != null) {
             socketToAbort.abort();
         }
-        log.warn("relay connection disconnected: deviceId={}, state={}, retryDelay={}, reason={}",
-                credential.getDeviceId(), state.get(), delay, throwable.getClass().getSimpleName());
+        log.warn("relay connection disconnected: deviceId={}, state={}, retryDelay={}, reason={}, detail={}",
+                credential.getDeviceId(), state.get(), delay, throwable.getClass().getSimpleName(),
+                safeDisconnectDetail(throwable));
     }
 
     private void onWelcome(DeviceCredentialState credential, long expectedGeneration, long attemptId, WebSocket source,
@@ -392,6 +393,14 @@ public class RelayWebSocketClient implements DaemonOutboundSender {
         if (future != null) {
             future.cancel(false);
         }
+    }
+
+    private String safeDisconnectDetail(Throwable throwable) {
+        if (throwable == null || throwable.getMessage() == null) {
+            return "";
+        }
+        String message = throwable.getMessage();
+        return message.length() > 240 ? message.substring(0, 240) + "..." : message;
     }
 
     @PreDestroy

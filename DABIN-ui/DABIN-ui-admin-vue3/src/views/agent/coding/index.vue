@@ -115,7 +115,8 @@
 
         <template v-else-if="pairingCode">
           <p class="pairing-dialog__hint">
-            在需要运行 Codex 的电脑上启动 Daemon，并使用下面的一次性配对码完成连接。
+            复制下面的命令，在需要运行 Codex 的开发机本地执行。首次连接成功后，本机会弹出项目目录选择窗口，
+            选择完成后开发机会自动保持在线。
           </p>
           <div class="pairing-dialog__code">{{ pairingCode.pairingCode }}</div>
           <div class="pairing-dialog__meta">
@@ -152,14 +153,17 @@ import { ElButton, ElDialog, ElMessage, ElMessageBox } from 'element-plus'
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as AgentApi from '@/api/agent'
 import { useAgentCodingStore } from '@/store/modules/agentCoding'
-import type { AgentPairingCode, FileChange } from '@/api/agent/types'
+import type { AgentDevice, AgentPairingCode, FileChange } from '@/api/agent/types'
 
 defineOptions({ name: 'AgentCodingWorkspace' })
 
 type PairingStatus = 'IDLE' | 'GENERATING' | 'WAITING' | 'EXPIRED' | 'SUCCESS' | 'FAILED'
+type DeviceVisualStatus = 'ONLINE_READY' | 'ONLINE_RUNTIME_UNAVAILABLE' | 'OFFLINE'
 
 const PAIRING_POLL_INTERVAL = 2500
 const PAIRING_SUCCESS_CLOSE_DELAY = 1200
+const DEVICE_REFRESH_INTERVAL = 5000
+const EMPTY_PROJECT_POLL_INTERVAL = 3000
 
 const store = useAgentCodingStore()
 const prompt = ref('')
@@ -177,6 +181,9 @@ let pairingPollTimer: number | undefined
 let pairingCloseTimer: number | undefined
 let pairingGeneration = 0
 let pairingPollInFlight = false
+let deviceRefreshTimer: number | undefined
+let emptyProjectPollTimer: number | undefined
+let emptyProjectPollInFlight = false
 
 const realtimeText = computed(() => {
   const map: Record<string, string> = {
@@ -195,6 +202,17 @@ const realtimeTagType = computed(() => {
 })
 
 const sessionStatusText = computed(() => sessionText(store.currentSession?.sessionStatus))
+const sortedDevices = computed(() =>
+  store.devices
+    .slice()
+    .sort((first, second) => {
+      const weightDiff = deviceSortWeight(second) - deviceSortWeight(first)
+      if (weightDiff !== 0) {
+        return weightDiff
+      }
+      return deviceName(first).localeCompare(deviceName(second), 'zh-CN')
+    })
+)
 const sessionTagType = computed(() => {
   const status = store.currentSession?.sessionStatus
   if (status === 'IDLE') return 'success'
@@ -216,11 +234,11 @@ const workspaceDescription = computed(() => {
   if (!store.currentDevice) {
     return '添加开发机并完成配对后开始 Session'
   }
-  return '当前开发机还没有注册项目'
+  return '请在开发机本地添加项目目录后继续'
 })
 const pairingCommand = computed(() =>
   pairingCode.value
-    ? `java -jar DABIN-agent-daemon/target/DABIN-agent-daemon.jar --mode=pair --pairingCode=${pairingCode.value.pairingCode}`
+    ? `java -jar DABIN-agent-daemon.jar --pairingCode=${pairingCode.value.pairingCode}`
     : ''
 )
 const pairingStatusText = computed(() => {
@@ -238,10 +256,14 @@ const pairingStatusText = computed(() => {
 onMounted(async () => {
   store.bindRealtime()
   await store.loadDevices()
+  startDeviceRefresh()
+  updateEmptyProjectPolling()
 })
 
 onBeforeUnmount(() => {
   stopPairingTimers()
+  stopDeviceRefresh()
+  stopEmptyProjectPolling()
   store.disconnectRealtime()
 })
 
@@ -263,6 +285,11 @@ watch(pairingDialogVisible, (visible) => {
     stopPairingTimers()
   }
 })
+
+watch(
+  () => [store.currentDevice?.id, store.currentDevice?.online, store.projects.length],
+  () => updateEmptyProjectPolling()
+)
 
 function sessionText(status?: string) {
   const map: Record<string, string> = {
@@ -321,6 +348,64 @@ async function handleCloseSession() {
 function openPairingDialog() {
   pairingDialogVisible.value = true
   void generatePairingCode()
+}
+
+function startDeviceRefresh() {
+  stopDeviceRefresh()
+  deviceRefreshTimer = window.setInterval(async () => {
+    try {
+      await store.refreshDevices()
+      updateEmptyProjectPolling()
+    } catch (error) {
+      console.warn('agent device refresh failed', extractErrorMessage(error))
+    }
+  }, DEVICE_REFRESH_INTERVAL)
+}
+
+function stopDeviceRefresh() {
+  if (deviceRefreshTimer !== undefined) {
+    window.clearInterval(deviceRefreshTimer)
+    deviceRefreshTimer = undefined
+  }
+}
+
+function updateEmptyProjectPolling() {
+  if (store.currentDevice?.online && store.projects.length === 0) {
+    startEmptyProjectPolling()
+    return
+  }
+  stopEmptyProjectPolling()
+}
+
+function startEmptyProjectPolling() {
+  if (emptyProjectPollTimer !== undefined) {
+    return
+  }
+  emptyProjectPollTimer = window.setInterval(async () => {
+    if (!store.currentDevice?.online || store.projects.length > 0 || emptyProjectPollInFlight) {
+      updateEmptyProjectPolling()
+      return
+    }
+    emptyProjectPollInFlight = true
+    try {
+      const projects = await store.reloadCurrentDeviceProjects()
+      if (projects.length > 0) {
+        stopEmptyProjectPolling()
+      }
+    } catch (error) {
+      console.warn('agent project refresh failed', extractErrorMessage(error))
+    } finally {
+      emptyProjectPollInFlight = false
+    }
+  }, EMPTY_PROJECT_POLL_INTERVAL)
+}
+
+function stopEmptyProjectPolling() {
+  if (emptyProjectPollTimer !== undefined) {
+    window.clearInterval(emptyProjectPollTimer)
+    emptyProjectPollTimer = undefined
+  }
+  emptyProjectPollInFlight = false
 }
 
 async function generatePairingCode() {
@@ -490,6 +575,82 @@ function extractErrorMessage(error: unknown) {
   return '请求失败'
 }
 
+function deviceVisualStatus(device: AgentDevice): DeviceVisualStatus {
+  if (!device.online) {
+    return 'OFFLINE'
+  }
+  return device.runtimeAvailable ? 'ONLINE_READY' : 'ONLINE_RUNTIME_UNAVAILABLE'
+}
+
+function deviceSortWeight(device: AgentDevice) {
+  const status = deviceVisualStatus(device)
+  if (status === 'ONLINE_READY') {
+    return 3
+  }
+  if (status === 'ONLINE_RUNTIME_UNAVAILABLE') {
+    return 2
+  }
+  return 1
+}
+
+function deviceStatusClass(status: DeviceVisualStatus) {
+  return {
+    ONLINE_READY: 'is-online-ready',
+    ONLINE_RUNTIME_UNAVAILABLE: 'is-online-runtime-unavailable',
+    OFFLINE: 'is-offline'
+  }[status]
+}
+
+function deviceName(device: AgentDevice) {
+  return device.deviceName || device.hostname || device.deviceId
+}
+
+function deviceInitial(device: AgentDevice) {
+  return deviceName(device).slice(0, 1).toUpperCase()
+}
+
+function deviceStatusText(device: AgentDevice) {
+  const status = deviceVisualStatus(device)
+  if (status === 'ONLINE_READY') {
+    return '在线 · Codex Ready'
+  }
+  if (status === 'ONLINE_RUNTIME_UNAVAILABLE') {
+    return '在线 · Codex 未就绪'
+  }
+  return device.lastSeenAt ? `离线 · ${formatLastSeen(device.lastSeenAt)}` : '离线'
+}
+
+function deviceSubText(device: AgentDevice) {
+  return [device.hostname, device.osName].filter(Boolean).join(' · ') || device.deviceId
+}
+
+function formatLastSeen(lastSeenAt: string) {
+  const time = new Date(lastSeenAt).getTime()
+  if (!Number.isFinite(time)) {
+    return '最后在线时间未知'
+  }
+  const minutes = Math.max(1, Math.floor((Date.now() - time) / 60000))
+  if (minutes < 60) {
+    return `${minutes} 分钟前`
+  }
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    return `${hours} 小时前`
+  }
+  return `${Math.floor(hours / 24)} 天前`
+}
+
+function projectEmptyView(device: AgentDevice) {
+  return h('div', { class: 'picker-empty picker-empty--project' }, [
+    h('strong', '当前开发机还没有项目'),
+    h('p', [
+      `请在「${deviceName(device)}」本机运行 DABIN Agent，`,
+      '选择允许 AI 操作的代码项目目录。支持一次添加多个项目。'
+    ]),
+    h('pre', { class: 'picker-empty__command' }, 'java -jar DABIN-agent-daemon.jar --setupProjects')
+  ])
+}
+
 const DeviceProjectPicker = defineComponent({
   name: 'DeviceProjectPicker',
   setup() {
@@ -513,7 +674,7 @@ const DeviceProjectPicker = defineComponent({
           store.devices.length === 0
             ? h('div', { class: 'picker-empty' }, [
                 h('strong', '还没有连接开发机'),
-                h('p', '在需要运行 Codex 的电脑上启动 Daemon，然后使用一次性配对码完成连接。'),
+                h('p', '在需要运行 Codex 的电脑上执行配对命令。首次连接成功后，开发机会自动保持在线。'),
                 h(
                   ElButton,
                   {
@@ -524,31 +685,44 @@ const DeviceProjectPicker = defineComponent({
                   () => '添加开发机'
                 )
               ])
-            : store.devices.map((device) =>
-                h(
+            : sortedDevices.value.map((device) => {
+                const status = deviceVisualStatus(device)
+                return h(
                   'button',
                   {
-                    class: ['picker__item', store.currentDevice?.id === device.id ? 'is-active' : ''],
+                    class: [
+                      'picker__item',
+                      'picker-device',
+                      deviceStatusClass(status),
+                      store.currentDevice?.id === device.id ? 'is-active' : ''
+                    ],
                     onClick: () => store.selectDevice(device)
                   },
                   [
-                    h('span', { class: 'picker__name' }, device.deviceName || device.hostname || device.deviceId),
-                    h('span', { class: device.online ? 'picker__online' : 'picker__offline' }, device.online ? '在线' : '离线')
+                    h('span', { class: 'picker-device__avatar' }, [
+                      h('span', { class: 'picker-device__initial' }, deviceInitial(device)),
+                      h('span', { class: 'picker-device__dot' })
+                    ]),
+                    h('span', { class: 'picker-device__body' }, [
+                      h('span', { class: 'picker__name' }, deviceName(device)),
+                      h('span', { class: 'picker-device__status' }, deviceStatusText(device)),
+                      h('span', { class: 'picker-device__sub' }, deviceSubText(device))
+                    ])
                   ]
                 )
-              )
+              })
         ]),
         h('div', { class: 'picker__section' }, [
           h('div', { class: 'picker__title' }, '项目'),
           !store.currentDevice
             ? h('div', { class: 'picker-empty picker-empty--compact' }, '连接开发机后显示项目')
             : store.projects.length === 0
-            ? h('div', { class: 'picker-empty picker-empty--compact' }, '当前开发机还没有注册项目')
+            ? projectEmptyView(store.currentDevice)
             : store.projects.map((project) =>
                 h(
                   'button',
                   {
-                    class: ['picker__item', store.currentProject?.id === project.id ? 'is-active' : ''],
+                    class: ['picker__item', 'picker-project', store.currentProject?.id === project.id ? 'is-active' : ''],
                     disabled: !store.currentDevice?.online || project.projectStatus !== 'ACTIVE',
                     onClick: () => store.selectProject(project)
                   },
@@ -895,23 +1069,117 @@ function changeTypeText(type: string) {
   }
 }
 
+.picker-device {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    opacity 0.16s ease;
+
+  &.is-active {
+    background: #eff6ff;
+    border-color: #2563eb;
+    box-shadow: inset 3px 0 0 #2563eb, 0 0 0 3px rgb(37 99 235 / 10%);
+  }
+}
+
+.picker-device__avatar {
+  position: relative;
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb);
+  border-radius: 14px;
+}
+
+.picker-device__initial {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.picker-device__dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 11px;
+  height: 11px;
+  background: #22c55e;
+  border: 2px solid #fff;
+  border-radius: 999px;
+}
+
+.picker-device__body {
+  min-width: 0;
+}
+
+.picker-device__status,
+.picker-device__sub {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-device__sub {
+  color: #94a3b8;
+}
+
+.picker-device.is-online-ready {
+  .picker-device__status {
+    color: #15803d;
+  }
+}
+
+.picker-device.is-online-runtime-unavailable {
+  .picker-device__avatar {
+    background: linear-gradient(135deg, #f59e0b, #fb923c);
+  }
+
+  .picker-device__dot {
+    background: #f59e0b;
+  }
+
+  .picker-device__status {
+    color: #b45309;
+  }
+}
+
+.picker-device.is-offline {
+  opacity: 0.58;
+
+  .picker-device__avatar {
+    color: #64748b;
+    background: #e2e8f0;
+  }
+
+  .picker-device__dot {
+    background: #94a3b8;
+  }
+
+  .picker-device__status {
+    color: #64748b;
+  }
+}
+
+.picker-project {
+  display: block;
+}
+
 .picker__name,
 .picker__meta {
   display: block;
 }
 
-.picker__online,
-.picker__offline,
 .picker__meta {
   font-size: 12px;
-}
-
-.picker__online {
-  color: #16a34a;
-}
-
-.picker__offline {
-  color: #dc2626;
 }
 
 .picker-empty {
@@ -936,6 +1204,24 @@ function changeTypeText(type: string) {
 .picker-empty--compact {
   padding: 12px;
   font-size: 13px;
+}
+
+.picker-empty--project {
+  padding: 14px;
+
+  p {
+    margin: 0 0 10px;
+  }
+}
+
+.picker-empty__command {
+  padding: 10px;
+  margin: 0;
+  overflow-x: auto;
+  font-size: 12px;
+  color: #dbeafe;
+  background: #0f172a;
+  border-radius: 10px;
 }
 
 .change-card {

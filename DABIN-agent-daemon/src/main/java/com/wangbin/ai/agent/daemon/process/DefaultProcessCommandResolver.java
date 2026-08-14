@@ -14,6 +14,8 @@ import java.util.Map;
 public class DefaultProcessCommandResolver implements ProcessCommandResolver {
 
     private static final List<String> WINDOWS_EXTENSIONS = List.of(".exe", ".cmd", ".bat", ".com", ".ps1");
+    private static final List<String> WINDOWS_FALLBACK_ENV_DIRECTORIES = List.of("NVM_SYMLINK", "APPDATA");
+    private static final String WINDOWS_NPM_DIRECTORY = "npm";
 
     @Override
     public ResolvedCommand resolve(String executable) {
@@ -30,7 +32,7 @@ public class DefaultProcessCommandResolver implements ProcessCommandResolver {
     }
 
     private java.util.Optional<ResolvedCommand> searchPath(String executable) {
-        List<String> pathEntries = splitPath(environmentValue("PATH"));
+        List<String> pathEntries = candidateDirectories();
         List<String> candidates = isWindows() && !hasExtension(executable)
                 ? WINDOWS_EXTENSIONS.stream().map(extension -> executable + extension).toList()
                 : List.of(executable);
@@ -44,6 +46,24 @@ public class DefaultProcessCommandResolver implements ProcessCommandResolver {
             }
         }
         return java.util.Optional.empty();
+    }
+
+    private List<String> candidateDirectories() {
+        List<String> pathEntries = new java.util.ArrayList<>(splitPath(environmentValue("PATH")));
+        if (!isWindows()) {
+            return pathEntries;
+        }
+        for (String environmentName : WINDOWS_FALLBACK_ENV_DIRECTORIES) {
+            String value = environmentValue(environmentName);
+            if (value == null || value.isBlank()) {
+                continue;
+            }
+            Path directory = "APPDATA".equals(environmentName)
+                    ? Path.of(value).resolve(WINDOWS_NPM_DIRECTORY)
+                    : Path.of(value);
+            pathEntries.add(directory.toString());
+        }
+        return pathEntries;
     }
 
     private java.util.Optional<ResolvedCommand> resolvedIfUsable(Path path) {

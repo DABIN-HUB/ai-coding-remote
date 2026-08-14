@@ -17,6 +17,8 @@ import com.wangbin.ai.agent.daemon.cloud.controlplane.RegisterProjectResponse;
 import com.wangbin.ai.agent.daemon.cloud.controlplane.RelayTicketResponse;
 import com.wangbin.ai.agent.daemon.cloud.controlplane.RuntimeReportRequest;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
+import com.wangbin.ai.agent.daemon.project.AuthorizedProjectState;
+import com.wangbin.ai.agent.daemon.project.AuthorizedProjectStore;
 import com.wangbin.ai.agent.daemon.project.InMemoryLocalProjectRegistry;
 import com.wangbin.ai.agent.daemon.project.LocalProject;
 import com.wangbin.ai.agent.daemon.runtime.RuntimeDiscovery;
@@ -60,10 +62,11 @@ class DaemonProjectRuntimeBootstrapTest {
         InMemoryLocalProjectRegistry registry = new InMemoryLocalProjectRegistry(workspaceManager);
         FakeRuntimeDiscovery runtimeDiscovery = new FakeRuntimeDiscovery(workspace.resolve(TEST_EXECUTABLE));
 
-        new DaemonProjectRuntimeBootstrap(properties, workspaceManager, controlPlaneClient, registry,
+        new DaemonProjectRuntimeBootstrap(properties, new FakeAuthorizedProjectStore(List.of()), workspaceManager,
+                controlPlaneClient, registry,
                 runtimeDiscovery, List.of(new FakeCodexAdapter())).bootstrap(credential());
 
-        RegisterProjectRequest request = controlPlaneClient.projectRequest;
+        RegisterProjectRequest request = controlPlaneClient.projectRequests.getFirst();
         assertThat(request.localProjectId()).isEqualTo(TEST_LOCAL_PROJECT_ID);
         assertThat(request.projectName()).isEqualTo(TEST_PROJECT_NAME);
         assertThat(request.workspacePath()).isEqualTo(workspace.toString());
@@ -77,6 +80,52 @@ class DaemonProjectRuntimeBootstrapTest {
         assertThat(runtimeRequest.executablePath()).isEqualTo(runtimeDiscovery.resolvedPath.toString());
         assertThat(runtimeRequest.capabilities().prompt()).isTrue();
         assertThat(runtimeRequest.capabilities().permission()).isTrue();
+    }
+
+    @Test
+    void bootstrapRegistersMultipleAuthorizedProjectsAndSkipsInvalidOne() throws IOException {
+        Path workspaceA = testWorkspace();
+        Path workspaceC = testWorkspace();
+        Path invalidWorkspace = workspaceA.resolve("missing");
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        FakeWorkspaceManager workspaceManager = new FakeWorkspaceManager(workspaceA.toAbsolutePath().normalize());
+        workspaceManager.addRealPath(workspaceC.toString(), workspaceC.toAbsolutePath().normalize());
+        workspaceManager.rejectPath(invalidWorkspace.toString());
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+        InMemoryLocalProjectRegistry registry = new InMemoryLocalProjectRegistry(workspaceManager);
+        FakeRuntimeDiscovery runtimeDiscovery = new FakeRuntimeDiscovery(workspaceA.resolve(TEST_EXECUTABLE));
+
+        new DaemonProjectRuntimeBootstrap(properties, new FakeAuthorizedProjectStore(List.of(
+                new AuthorizedProjectState("local-a", "Project A", workspaceA.toString(), AgentType.CODEX),
+                new AuthorizedProjectState("local-b", "Project B", invalidWorkspace.toString(), AgentType.CODEX),
+                new AuthorizedProjectState("local-c", "Project C", workspaceC.toString(), AgentType.CODEX)
+        )), workspaceManager, controlPlaneClient, registry,
+                runtimeDiscovery, List.of(new FakeCodexAdapter())).bootstrap(credential());
+
+        assertThat(controlPlaneClient.projectRequests)
+                .extracting(RegisterProjectRequest::localProjectId)
+                .containsExactly("local-a", "local-c");
+    }
+
+    @Test
+    void runtimeReportFailureShouldNotAbortBootstrap() throws IOException {
+        Path workspace = testWorkspace();
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        FakeWorkspaceManager workspaceManager = new FakeWorkspaceManager(workspace.toAbsolutePath().normalize());
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+        controlPlaneClient.failRuntimeReport = true;
+        InMemoryLocalProjectRegistry registry = new InMemoryLocalProjectRegistry(workspaceManager);
+        FakeRuntimeDiscovery runtimeDiscovery = new FakeRuntimeDiscovery(workspace.resolve(TEST_EXECUTABLE));
+
+        new DaemonProjectRuntimeBootstrap(properties, new FakeAuthorizedProjectStore(List.of(
+                new AuthorizedProjectState("local-a", "Project A", workspace.toString(), AgentType.CODEX)
+        )), workspaceManager, controlPlaneClient, registry,
+                runtimeDiscovery, List.of(new FakeCodexAdapter())).bootstrap(credential());
+
+        assertThat(controlPlaneClient.projectRequests)
+                .extracting(RegisterProjectRequest::localProjectId)
+                .containsExactly("local-a");
+        assertThat(registry.findByPlatformProjectId(TEST_PLATFORM_PROJECT_ID)).isPresent();
     }
 
     private Path testWorkspace() throws IOException {
@@ -97,14 +146,27 @@ class DaemonProjectRuntimeBootstrapTest {
     private static final class FakeWorkspaceManager implements WorkspaceManager {
 
         private final Path realPath;
+        private final Map<String, Path> realPaths = new java.util.HashMap<>();
+        private final java.util.Set<String> rejectedPaths = new java.util.HashSet<>();
 
         private FakeWorkspaceManager(Path realPath) {
             this.realPath = realPath;
         }
 
+        private void addRealPath(String workspacePath, Path realPath) {
+            realPaths.put(workspacePath, realPath);
+        }
+
+        private void rejectPath(String workspacePath) {
+            rejectedPaths.add(workspacePath);
+        }
+
         @Override
         public Path validateWorkspace(String workspacePath) {
-            return realPath;
+            if (rejectedPaths.contains(workspacePath)) {
+                throw new IllegalArgumentException("invalid workspace");
+            }
+            return realPaths.getOrDefault(workspacePath, realPath);
         }
 
         @Override
@@ -116,7 +178,9 @@ class DaemonProjectRuntimeBootstrapTest {
     private static final class FakeControlPlaneClient implements ControlPlaneClient {
 
         private RegisterProjectRequest projectRequest;
+        private final List<RegisterProjectRequest> projectRequests = new java.util.ArrayList<>();
         private RuntimeReportRequest runtimeRequest;
+        private boolean failRuntimeReport;
 
         @Override
         public PairDeviceResponse pair(String controlPlaneUrl, PairDeviceRequest request) {
@@ -132,6 +196,7 @@ class DaemonProjectRuntimeBootstrapTest {
         public RegisterProjectResponse registerProject(DeviceCredentialState credential,
                                                        RegisterProjectRequest request) {
             this.projectRequest = request;
+            this.projectRequests.add(request);
             return new RegisterProjectResponse(10L, TEST_PLATFORM_PROJECT_ID, request.localProjectId(),
                     request.projectName(), "cloud must not override local workspace",
                     "cloud must not override local real path", request.agentType().name());
@@ -139,7 +204,31 @@ class DaemonProjectRuntimeBootstrapTest {
 
         @Override
         public void reportRuntime(DeviceCredentialState credential, RuntimeReportRequest request) {
+            if (failRuntimeReport) {
+                throw new IllegalStateException("runtime report unavailable");
+            }
             this.runtimeRequest = request;
+        }
+    }
+
+    private static class FakeAuthorizedProjectStore extends AuthorizedProjectStore {
+
+        private List<AuthorizedProjectState> projects;
+
+        FakeAuthorizedProjectStore(List<AuthorizedProjectState> projects) {
+            super(new com.fasterxml.jackson.databind.ObjectMapper());
+            this.projects = projects;
+        }
+
+        @Override
+        public synchronized List<AuthorizedProjectState> load() {
+            return projects;
+        }
+
+        @Override
+        public synchronized List<AuthorizedProjectState> addProjects(java.util.Collection<AuthorizedProjectState> projects) {
+            this.projects = List.copyOf(projects);
+            return this.projects;
         }
     }
 

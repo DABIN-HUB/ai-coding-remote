@@ -108,7 +108,7 @@ export const useAgentCodingStore = defineStore('agentCoding', {
     async loadDevices() {
       await this.refreshDevices()
       if (!this.currentDevice && this.devices.length > 0) {
-        await this.selectDevice(this.devices[0])
+        await this.selectDevice(preferredDevice(this.devices))
       }
     },
     async fetchDeviceSnapshot() {
@@ -146,6 +146,13 @@ export const useAgentCodingStore = defineStore('agentCoding', {
       if (currentDeviceId !== undefined && !devices.some((device) => device.id === currentDeviceId)) {
         this.currentDevice = undefined
         this.clearDeviceContext()
+        return this.devices
+      }
+      if (currentDeviceId !== undefined) {
+        const currentDevice = devices.find((device) => device.id === currentDeviceId)
+        if (currentDevice) {
+          this.currentDevice = currentDevice
+        }
       }
       return this.devices
     },
@@ -198,6 +205,26 @@ export const useAgentCodingStore = defineStore('agentCoding', {
         this.clearSessionContext()
       }
       this.currentProject = nextProject
+    },
+    async reloadCurrentDeviceProjects() {
+      if (!this.currentDevice) {
+        this.projects = []
+        this.currentProject = undefined
+        return []
+      }
+      const selectedDeviceId = this.currentDevice.id
+      const previousProjectId = this.currentProject?.id
+      const page = await AgentApi.getProjectPage({ pageNo: 1, pageSize: PAGE_SIZE, deviceDbId: selectedDeviceId })
+      if (this.currentDevice?.id !== selectedDeviceId) {
+        return this.projects
+      }
+      this.projects = page.list || []
+      const nextProject = this.projects.find((project) => project.id === previousProjectId) || this.projects[0]
+      if (this.currentProject?.id !== nextProject?.id) {
+        this.clearSessionContext()
+      }
+      this.currentProject = nextProject
+      return this.projects
     },
     selectProject(project: AgentProject) {
       if (!this.currentDevice || project.deviceId !== this.currentDevice.id) {
@@ -668,6 +695,14 @@ function parseJson(value?: string): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function preferredDevice(devices: AgentDevice[]): AgentDevice {
+  return (
+    devices.find((device) => device.online && device.runtimeAvailable) ||
+    devices.find((device) => device.online) ||
+    devices[0]
+  )
 }
 
 function readablePayload(payload: unknown): string {

@@ -10,7 +10,10 @@ import com.wangbin.ai.agent.daemon.cloud.controlplane.RegisterProjectResponse;
 import com.wangbin.ai.agent.daemon.cloud.controlplane.RuntimeReportRequest;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
 import com.wangbin.ai.agent.daemon.exception.AgentProtocolException;
+import com.wangbin.ai.agent.daemon.project.AuthorizedProjectState;
+import com.wangbin.ai.agent.daemon.project.AuthorizedProjectStore;
 import com.wangbin.ai.agent.daemon.project.LocalProjectRegistry;
+import com.wangbin.ai.agent.daemon.project.LocalProjectIdFactory;
 import com.wangbin.ai.agent.daemon.runtime.RuntimeDiscovery;
 import com.wangbin.ai.agent.daemon.runtime.RuntimeDiscoveryResult;
 import com.wangbin.ai.agent.daemon.runtime.RuntimeInstallStatus;
@@ -20,11 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -36,10 +36,9 @@ import java.util.List;
 public class DaemonProjectRuntimeBootstrap {
 
     private static final Logger log = LoggerFactory.getLogger(DaemonProjectRuntimeBootstrap.class);
-    private static final String LOCAL_PROJECT_ID_PREFIX = "local_";
-    private static final String SHA_256_ALGORITHM = "SHA-256";
 
     private final AgentDaemonProperties properties;
+    private final AuthorizedProjectStore authorizedProjectStore;
     private final WorkspaceManager workspaceManager;
     private final ControlPlaneClient controlPlaneClient;
     private final LocalProjectRegistry localProjectRegistry;
@@ -47,12 +46,14 @@ public class DaemonProjectRuntimeBootstrap {
     private final List<CodingAgentAdapter> adapters;
 
     public DaemonProjectRuntimeBootstrap(AgentDaemonProperties properties,
+                                         AuthorizedProjectStore authorizedProjectStore,
                                          WorkspaceManager workspaceManager,
                                          ControlPlaneClient controlPlaneClient,
                                          LocalProjectRegistry localProjectRegistry,
                                          RuntimeDiscovery runtimeDiscovery,
                                          List<CodingAgentAdapter> adapters) {
         this.properties = properties;
+        this.authorizedProjectStore = authorizedProjectStore;
         this.workspaceManager = workspaceManager;
         this.controlPlaneClient = controlPlaneClient;
         this.localProjectRegistry = localProjectRegistry;
@@ -61,26 +62,68 @@ public class DaemonProjectRuntimeBootstrap {
     }
 
     public void bootstrap(DeviceCredentialState credential) {
-        registerConfiguredProjects(credential);
+        registerProjects(credential);
         reportCodexRuntime(credential);
     }
 
-    private void registerConfiguredProjects(DeviceCredentialState credential) {
-        for (AgentDaemonProperties.Project configured : properties.getProjects()) {
-            Path realWorkspace = workspaceManager.validateWorkspace(configured.getWorkspacePath());
-            AgentType agentType = configured.getAgentType() == null ? AgentType.CODEX : configured.getAgentType();
-            String localProjectId = textOrDefault(configured.getLocalProjectId(), stableLocalProjectId(realWorkspace));
-            String projectName = textOrDefault(configured.getProjectName(), defaultProjectName(realWorkspace));
-            RegisterProjectResponse response = controlPlaneClient.registerProject(credential,
-                    new RegisterProjectRequest(localProjectId, projectName, configured.getWorkspacePath(),
-                            realWorkspace.toString(), agentType));
-            String platformProjectId = response == null ? null : response.projectId();
-            if (platformProjectId == null || platformProjectId.isBlank()) {
-                throw new AgentProtocolException("control plane did not return platform project id");
+    private void registerProjects(DeviceCredentialState credential) {
+        List<AuthorizedProjectState> projects = loadAuthorizedProjects();
+        for (AuthorizedProjectState project : projects) {
+            try {
+                registerProject(credential, project);
+            } catch (RuntimeException ex) {
+                log.warn("skip unavailable local project: localProjectId={}, workspacePath={}, reason={}",
+                        project.localProjectId(), project.workspacePath(), ex.getMessage());
             }
-            localProjectRegistry.register(platformProjectId, localProjectId, projectName, realWorkspace.toString(),
-                    agentType);
         }
+    }
+
+    private List<AuthorizedProjectState> loadAuthorizedProjects() {
+        List<AuthorizedProjectState> projects = authorizedProjectStore.load();
+        if (!projects.isEmpty()) {
+            return projects;
+        }
+        List<AuthorizedProjectState> imported = importConfiguredProjects();
+        if (!imported.isEmpty()) {
+            return authorizedProjectStore.addProjects(imported);
+        }
+        return List.of();
+    }
+
+    private List<AuthorizedProjectState> importConfiguredProjects() {
+        List<AuthorizedProjectState> imported = new ArrayList<>();
+        for (AgentDaemonProperties.Project configured : properties.getProjects()) {
+            try {
+                Path realWorkspace = workspaceManager.validateWorkspace(configured.getWorkspacePath());
+                AgentType agentType = configured.getAgentType() == null ? AgentType.CODEX : configured.getAgentType();
+                String localProjectId = textOrDefault(configured.getLocalProjectId(),
+                        LocalProjectIdFactory.stableLocalProjectId(realWorkspace));
+                String projectName = textOrDefault(configured.getProjectName(), defaultProjectName(realWorkspace));
+                imported.add(new AuthorizedProjectState(localProjectId, projectName, realWorkspace.toString(),
+                        agentType));
+            } catch (RuntimeException ex) {
+                log.warn("skip invalid legacy configured project: workspacePath={}, reason={}",
+                        configured.getWorkspacePath(), ex.getMessage());
+            }
+        }
+        return imported;
+    }
+
+    private void registerProject(DeviceCredentialState credential, AuthorizedProjectState project) {
+        Path realWorkspace = workspaceManager.validateWorkspace(project.workspacePath());
+        AgentType agentType = project.agentType() == null ? AgentType.CODEX : project.agentType();
+        String localProjectId = textOrDefault(project.localProjectId(),
+                LocalProjectIdFactory.stableLocalProjectId(realWorkspace));
+        String projectName = textOrDefault(project.projectName(), defaultProjectName(realWorkspace));
+        RegisterProjectResponse response = controlPlaneClient.registerProject(credential,
+                new RegisterProjectRequest(localProjectId, projectName, project.workspacePath(),
+                        realWorkspace.toString(), agentType));
+        String platformProjectId = response == null ? null : response.projectId();
+        if (platformProjectId == null || platformProjectId.isBlank()) {
+            throw new AgentProtocolException("control plane did not return platform project id");
+        }
+        localProjectRegistry.register(platformProjectId, localProjectId, projectName, realWorkspace.toString(),
+                agentType);
     }
 
     private void reportCodexRuntime(DeviceCredentialState credential) {
@@ -90,9 +133,14 @@ public class DaemonProjectRuntimeBootstrap {
                     result.status(), result.diagnostic());
             return;
         }
-        controlPlaneClient.reportRuntime(credential, new RuntimeReportRequest(null, AgentType.CODEX,
-                AgentRuntimeTypes.CODEX_APP_SERVER, result.version(), executablePath(result),
-                capabilities(AgentType.CODEX)));
+        try {
+            controlPlaneClient.reportRuntime(credential, new RuntimeReportRequest(null, AgentType.CODEX,
+                    AgentRuntimeTypes.CODEX_APP_SERVER, result.version(), executablePath(result),
+                    capabilities(AgentType.CODEX)));
+        } catch (RuntimeException ex) {
+            log.warn("failed to report local runtime; daemon will keep relay reconnect loop alive: runtimeType={}, reason={}",
+                    AgentRuntimeTypes.CODEX_APP_SERVER, ex.getMessage());
+        }
     }
 
     private AgentCapabilities capabilities(AgentType agentType) {
@@ -108,16 +156,6 @@ public class DaemonProjectRuntimeBootstrap {
             return result.resolvedPath().toString();
         }
         return result.executable();
-    }
-
-    private String stableLocalProjectId(Path realWorkspace) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance(SHA_256_ALGORITHM);
-            byte[] hash = digest.digest(realWorkspace.toString().getBytes(StandardCharsets.UTF_8));
-            return LOCAL_PROJECT_ID_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
-        } catch (NoSuchAlgorithmException ex) {
-            throw new IllegalStateException("SHA-256 digest is not available", ex);
-        }
     }
 
     private String defaultProjectName(Path realWorkspace) {

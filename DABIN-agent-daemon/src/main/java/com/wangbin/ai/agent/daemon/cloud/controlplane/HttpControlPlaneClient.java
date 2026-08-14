@@ -21,6 +21,7 @@ import java.nio.file.Path;
 @Component
 public class HttpControlPlaneClient implements ControlPlaneClient {
 
+    private static final String ADMIN_API_PREFIX = "/admin-api";
     private static final String PAIR_DEVICE_PATH = "/agent/device/pair";
     private static final String CREATE_RELAY_TICKET_PATH = "/agent/device/createRelayTicket";
     private static final String REGISTER_PROJECT_PATH = "/agent/project/register";
@@ -42,14 +43,14 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
 
     @Override
     public PairDeviceResponse pair(String controlPlaneUrl, PairDeviceRequest request) {
-        return post(controlPlaneUrl + PAIR_DEVICE_PATH, request, PairDeviceResponse.class);
+        return post(apiUrl(controlPlaneUrl, PAIR_DEVICE_PATH), request, PairDeviceResponse.class);
     }
 
     @Override
     public RelayTicketResponse createDeviceRelayTicket(DeviceCredentialState credential) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(credential.getControlPlaneUrl() + CREATE_RELAY_TICKET_PATH))
+                    .uri(URI.create(apiUrl(credential.getControlPlaneUrl(), CREATE_RELAY_TICKET_PATH)))
                     .header(AgentHttpHeaders.TENANT_ID, String.valueOf(credential.getTenantId()))
                     .header(AgentHttpHeaders.CREDENTIAL_ID, credential.getCredentialId())
                     .header(AgentHttpHeaders.CREDENTIAL_SECRET, credential.getCredentialSecret())
@@ -83,7 +84,7 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
                                Path file, String contentType, long contentLength) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(credential.getControlPlaneUrl() + UPLOAD_ARTIFACT_PATH))
+                    .uri(URI.create(apiUrl(credential.getControlPlaneUrl(), UPLOAD_ARTIFACT_PATH)))
                     .header(HEADER_CONTENT_TYPE, contentType == null || contentType.isBlank()
                             ? CONTENT_TYPE_OCTET_STREAM : contentType)
                     .header(AgentHttpHeaders.ARTIFACT_UPLOAD_TICKET, uploadTicket)
@@ -122,7 +123,7 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
     private <T> T postWithCredential(DeviceCredentialState credential, String path, Object body, Class<T> responseType) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(credential.getControlPlaneUrl() + path))
+                    .uri(URI.create(apiUrl(credential.getControlPlaneUrl(), path)))
                     .header(HEADER_CONTENT_TYPE, CONTENT_TYPE_JSON)
                     .header(AgentHttpHeaders.TENANT_ID, String.valueOf(credential.getTenantId()))
                     .header(AgentHttpHeaders.CREDENTIAL_ID, credential.getCredentialId())
@@ -147,5 +148,28 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
             throw new AgentProtocolException("control plane returned error code " + result.code());
         }
         return result.data();
+    }
+
+    static String apiUrl(String controlPlaneUrl, String path) {
+        if (controlPlaneUrl == null || controlPlaneUrl.isBlank()) {
+            throw new AgentConnectionException("control plane URL must not be blank", null);
+        }
+        String base = trimTrailingSlash(controlPlaneUrl);
+        if (!base.endsWith(ADMIN_API_PREFIX)) {
+            base += ADMIN_API_PREFIX;
+        }
+        String apiPath = path == null || path.isBlank() ? "" : path;
+        if (!apiPath.startsWith("/")) {
+            apiPath = "/" + apiPath;
+        }
+        return base + apiPath;
+    }
+
+    private static String trimTrailingSlash(String value) {
+        String result = value.trim();
+        while (result.endsWith("/")) {
+            result = result.substring(0, result.length() - 1);
+        }
+        return result;
     }
 }

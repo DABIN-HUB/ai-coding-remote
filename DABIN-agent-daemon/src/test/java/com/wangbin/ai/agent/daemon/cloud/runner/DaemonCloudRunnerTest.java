@@ -8,18 +8,21 @@ import com.wangbin.ai.agent.daemon.cloud.controlplane.RelayTicketResponse;
 import com.wangbin.ai.agent.daemon.cloud.relay.DaemonOutboundChannel;
 import com.wangbin.ai.agent.daemon.cloud.relay.RelayWebSocketClient;
 import com.wangbin.ai.agent.daemon.config.AgentDaemonProperties;
+import com.wangbin.ai.agent.daemon.project.LocalProjectSetupService;
 import com.wangbin.ai.agent.daemon.state.DaemonStateStore;
 import com.wangbin.ai.agent.daemon.state.DeviceCredentialState;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.DefaultApplicationArguments;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -28,30 +31,112 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DaemonCloudRunnerTest {
 
     @Test
-    void runModeShouldKeepProcessAliveUntilLifecycleStops() throws Exception {
+    void runModeShouldStartCloudAndReturnAfterRelayLoopStarts() throws Exception {
         AgentDaemonProperties properties = new AgentDaemonProperties();
         DaemonRunLifecycle runLifecycle = new DaemonRunLifecycle();
         DeviceCredentialState credential = credential();
         FakeStateStore stateStore = new FakeStateStore(credential);
         RecordingBootstrap bootstrap = new RecordingBootstrap();
+        RecordingProjectSetupService projectSetupService = new RecordingProjectSetupService();
         RecordingRelayWebSocketClient relayWebSocketClient = new RecordingRelayWebSocketClient();
 
         DaemonCloudRunner runner = new DaemonCloudRunner(properties, stateStore, new FakeControlPlaneClient(),
-                relayWebSocketClient, bootstrap, runLifecycle);
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        try {
-            Future<?> future = executor.submit(() -> runner.run(new DefaultApplicationArguments("--mode=run")));
+                relayWebSocketClient, bootstrap, projectSetupService, runLifecycle);
 
-            assertThat(bootstrap.awaitCalled()).isTrue();
-            assertThat(relayWebSocketClient.awaitCalled()).isTrue();
-            assertThat(future.isDone()).isFalse();
+        runner.run(new DefaultApplicationArguments("--mode=run"));
 
-            runLifecycle.stop();
-            future.get(2, TimeUnit.SECONDS);
-        } finally {
-            executor.shutdownNow();
-            relayWebSocketClient.shutdown();
+        assertThat(bootstrap.awaitCalled()).isTrue();
+        assertThat(projectSetupService.awaitCalled()).isTrue();
+        assertThat(relayWebSocketClient.awaitCalled()).isTrue();
+        assertThat(runLifecycle.isRunning()).isTrue();
+        runLifecycle.stop();
+        relayWebSocketClient.shutdown();
+    }
+
+    @Test
+    void pairingCodeShouldPairThenStartCloudAndReturnAfterRelayLoopStarts() throws Exception {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        DaemonRunLifecycle runLifecycle = new DaemonRunLifecycle();
+        FakeStateStore stateStore = new FakeStateStore(null);
+        RecordingBootstrap bootstrap = new RecordingBootstrap();
+        RecordingProjectSetupService projectSetupService = new RecordingProjectSetupService();
+        RecordingRelayWebSocketClient relayWebSocketClient = new RecordingRelayWebSocketClient();
+        FakeControlPlaneClient controlPlaneClient = new FakeControlPlaneClient();
+
+        DaemonCloudRunner runner = new DaemonCloudRunner(properties, stateStore, controlPlaneClient,
+                relayWebSocketClient, bootstrap, projectSetupService, runLifecycle);
+
+        runner.run(new DefaultApplicationArguments("--pairingCode=ABCD-EFGH"));
+
+        assertThat(controlPlaneClient.awaitPaired()).isTrue();
+        assertThat(projectSetupService.awaitCalled()).isTrue();
+        assertThat(projectSetupService.promptIfEmpty).isTrue();
+        assertThat(bootstrap.awaitCalled()).isTrue();
+        assertThat(relayWebSocketClient.awaitCalled()).isTrue();
+        assertThat(runLifecycle.isRunning()).isTrue();
+        runLifecycle.stop();
+        relayWebSocketClient.shutdown();
+    }
+
+    @Test
+    void addProjectModeShouldOnlyUpdateLocalProjectStoreAndExit() {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        DaemonRunLifecycle runLifecycle = new DaemonRunLifecycle();
+        RecordingProjectSetupService projectSetupService = new RecordingProjectSetupService();
+        RecordingBootstrap bootstrap = new RecordingBootstrap();
+        RecordingRelayWebSocketClient relayWebSocketClient = new RecordingRelayWebSocketClient();
+        DaemonCloudRunner runner = new DaemonCloudRunner(properties, new FakeStateStore(credential()),
+                new FakeControlPlaneClient(), relayWebSocketClient, bootstrap, projectSetupService, runLifecycle);
+
+        runner.run(new DefaultApplicationArguments("--mode=add-project", "--projectPath=target/project-a"));
+
+        assertThat(projectSetupService.called).isTrue();
+        assertThat(bootstrap.isCalled()).isFalse();
+        assertThat(relayWebSocketClient.isCalled()).isFalse();
+        relayWebSocketClient.shutdown();
+    }
+
+    @Test
+    void projectAddSubCommandShouldBeSupported() {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        RecordingProjectSetupService projectSetupService = new RecordingProjectSetupService();
+        RecordingBootstrap bootstrap = new RecordingBootstrap();
+        RecordingRelayWebSocketClient relayWebSocketClient = new RecordingRelayWebSocketClient();
+        DaemonCloudRunner runner = new DaemonCloudRunner(properties, new FakeStateStore(credential()),
+                new FakeControlPlaneClient(), relayWebSocketClient, bootstrap, projectSetupService,
+                new DaemonRunLifecycle());
+
+        runner.run(new DefaultApplicationArguments("project", "add", "--path=target/project-a"));
+
+        assertThat(projectSetupService.called).isTrue();
+        assertThat(bootstrap.isCalled()).isFalse();
+        assertThat(relayWebSocketClient.isCalled()).isFalse();
+        relayWebSocketClient.shutdown();
+    }
+
+    @Test
+    void applicationReadyShouldStartCloudFlowAfterSpringStartup() {
+        AgentDaemonProperties properties = new AgentDaemonProperties();
+        RecordingProjectSetupService projectSetupService = new RecordingProjectSetupService();
+        RecordingBootstrap bootstrap = new RecordingBootstrap();
+        RecordingRelayWebSocketClient relayWebSocketClient = new RecordingRelayWebSocketClient();
+        DaemonRunLifecycle runLifecycle = new DaemonRunLifecycle();
+        DaemonCloudRunner runner = new DaemonCloudRunner(properties, new FakeStateStore(credential()),
+                new FakeControlPlaneClient(), relayWebSocketClient, bootstrap, projectSetupService, runLifecycle);
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.getBeanFactory().registerSingleton("applicationArguments",
+                    new DefaultApplicationArguments("--mode=run"));
+            context.refresh();
+
+            runner.onApplicationEvent(new ApplicationReadyEvent(new SpringApplication(), new String[0], context,
+                    Duration.ZERO));
         }
+
+        assertThat(bootstrap.isCalled()).isTrue();
+        assertThat(relayWebSocketClient.isCalled()).isTrue();
+        assertThat(runLifecycle.isRunning()).isTrue();
+        runLifecycle.stop();
+        relayWebSocketClient.shutdown();
     }
 
     private DeviceCredentialState credential() {
@@ -68,7 +153,7 @@ class DaemonCloudRunnerTest {
 
     private static class FakeStateStore extends DaemonStateStore {
 
-        private final DeviceCredentialState credential;
+        private DeviceCredentialState credential;
 
         FakeStateStore(DeviceCredentialState credential) {
             super(new ObjectMapper());
@@ -77,7 +162,12 @@ class DaemonCloudRunnerTest {
 
         @Override
         public synchronized Optional<DeviceCredentialState> loadCredential() {
-            return Optional.of(credential);
+            return Optional.ofNullable(credential);
+        }
+
+        @Override
+        public synchronized void saveCredential(DeviceCredentialState state) {
+            this.credential = state;
         }
     }
 
@@ -86,7 +176,7 @@ class DaemonCloudRunnerTest {
         private final CountDownLatch called = new CountDownLatch(1);
 
         RecordingBootstrap() {
-            super(null, null, null, null, null, List.of());
+            super(null, null, null, null, null, null, List.of());
         }
 
         @Override
@@ -96,6 +186,32 @@ class DaemonCloudRunnerTest {
 
         boolean awaitCalled() throws InterruptedException {
             return called.await(1, TimeUnit.SECONDS);
+        }
+
+        boolean isCalled() {
+            return called.getCount() == 0;
+        }
+    }
+
+    private static class RecordingProjectSetupService extends LocalProjectSetupService {
+
+        private volatile boolean called;
+        private volatile boolean promptIfEmpty;
+        private final CountDownLatch calledLatch = new CountDownLatch(1);
+
+        RecordingProjectSetupService() {
+            super(null, null);
+        }
+
+        @Override
+        public void configureProjects(org.springframework.boot.ApplicationArguments args, boolean promptIfEmpty) {
+            this.called = true;
+            this.promptIfEmpty = promptIfEmpty;
+            this.calledLatch.countDown();
+        }
+
+        boolean awaitCalled() throws InterruptedException {
+            return calledLatch.await(1, TimeUnit.SECONDS);
         }
     }
 
@@ -124,6 +240,10 @@ class DaemonCloudRunnerTest {
             return called.await(1, TimeUnit.SECONDS);
         }
 
+        boolean isCalled() {
+            return called.getCount() == 0;
+        }
+
         void shutdown() {
             scheduler.shutdownNow();
         }
@@ -131,9 +251,16 @@ class DaemonCloudRunnerTest {
 
     private static class FakeControlPlaneClient implements ControlPlaneClient {
 
+        private final CountDownLatch paired = new CountDownLatch(1);
+
         @Override
         public PairDeviceResponse pair(String controlPlaneUrl, PairDeviceRequest request) {
-            return null;
+            paired.countDown();
+            return new PairDeviceResponse(1L, "dev_smoke", "cred_smoke", "secret");
+        }
+
+        boolean awaitPaired() throws InterruptedException {
+            return paired.await(1, TimeUnit.SECONDS);
         }
 
         @Override

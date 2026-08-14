@@ -15,6 +15,8 @@ export interface AgentDevice {
   online?: boolean
   lastSeenAt?: string
   relayNodeId?: string
+  runtimeStatus?: string
+  runtimeAvailable?: boolean
 }
 
 export interface AgentProject {

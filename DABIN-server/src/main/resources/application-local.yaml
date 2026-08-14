@@ -83,9 +83,9 @@ spring:
   # Redis 配置。Redisson 默认的配置足够使用，一般不需要进行调优
   data:
     redis:
-      host: 127.0.0.1 # 地址
-      port: 6379 # 端口
-      database: 10 # 数据库索引
+      host: ${DABIN_REDIS_HOST:127.0.0.1} # 地址
+      port: ${DABIN_REDIS_PORT:6379} # 端口
+      database: ${DABIN_REDIS_DATABASE:10} # 数据库索引
 
 
 --- #################### 定时任务相关配置 ####################

@@ -4,13 +4,16 @@ import com.wangbin.ai.agent.contract.coordination.AgentCoordinationKeys;
 import com.wangbin.ai.agent.contract.coordination.DevicePresencePayload;
 import com.wangbin.ai.agent.contract.coordination.PairingCodePayload;
 import com.wangbin.ai.agent.contract.coordination.RelayTicketPayload;
+import com.wangbin.ai.agent.contract.runtime.AgentRuntimeTypes;
 import com.wangbin.ai.framework.common.pojo.PageResult;
 import com.wangbin.ai.framework.tenant.core.context.TenantContextHolder;
 import com.wangbin.ai.module.agent.controller.admin.device.vo.*;
 import com.wangbin.ai.module.agent.dal.dataobject.device.AgentDeviceCredentialDO;
 import com.wangbin.ai.module.agent.dal.dataobject.device.AgentDeviceDO;
+import com.wangbin.ai.module.agent.dal.dataobject.runtime.AgentRuntimeDO;
 import com.wangbin.ai.module.agent.dal.mysql.device.AgentDeviceCredentialMapper;
 import com.wangbin.ai.module.agent.dal.mysql.device.AgentDeviceMapper;
+import com.wangbin.ai.module.agent.dal.mysql.runtime.AgentRuntimeMapper;
 import com.wangbin.ai.module.agent.enums.CredentialStatus;
 import com.wangbin.ai.module.agent.enums.DeviceStatus;
 import com.wangbin.ai.module.agent.framework.config.AgentControlPlaneProperties;
@@ -45,6 +48,7 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
 
     private final AgentDeviceMapper deviceMapper;
     private final AgentDeviceCredentialMapper credentialMapper;
+    private final AgentRuntimeMapper runtimeMapper;
     private final PairingCodeService pairingCodeService;
     private final RelayTicketService relayTicketService;
     private final DevicePresenceService presenceService;
@@ -250,6 +254,13 @@ public class AgentDeviceServiceImpl implements AgentDeviceService {
         if (presence != null) {
             respVO.setLastSeenAt(presence.lastSeenAt());
             respVO.setRelayNodeId(presence.relayNodeId());
+        }
+        AgentRuntimeDO runtime = runtimeMapper.selectByDeviceAndType(device.getId(), AgentRuntimeTypes.CODEX_APP_SERVER);
+        if (runtime != null) {
+            respVO.setRuntimeStatus(runtime.getRuntimeStatus());
+            respVO.setRuntimeAvailable(runtime.isAvailable());
+        } else {
+            respVO.setRuntimeAvailable(false);
         }
         return respVO;
     }
